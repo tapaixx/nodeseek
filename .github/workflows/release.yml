@@ -39,10 +39,10 @@ jobs:
         run: |
           set -euo pipefail
           # 僅完整公開的版本跳過建置；未完成的草稿可以重試。
-          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-draft"; then
-            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
-            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
-            echo "published=$(test "$(cat "$RUNNER_TEMP/release-draft")" = false && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish --jq '"\(.isDraft) \(.targetCommitish)"' > "$RUNNER_TEMP/release-state"; then
+            read -r is_draft target_commit < "$RUNNER_TEMP/release-state"
+            test "$target_commit" = "$GITHUB_SHA"
+            echo "published=$(test "$is_draft" = false && echo true || echo false)" >> "$GITHUB_OUTPUT"
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
@@ -106,10 +106,10 @@ jobs:
           EOF
           gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
             -f "tag_name=$RELEASE_TAG" -f "target_commitish=$GITHUB_SHA" --jq '.body' >> "$notes"
-          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-draft"; then
-            test "$(cat "$RUNNER_TEMP/release-draft")" = true
-            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
-            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+          if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish --jq '"\(.isDraft) \(.targetCommitish)"' > "$RUNNER_TEMP/release-state"; then
+            read -r is_draft target_commit < "$RUNNER_TEMP/release-state"
+            test "$is_draft" = true
+            test "$target_commit" = "$GITHUB_SHA"
           else
             gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "$RELEASE_VERSION" --notes-file "$notes" --draft
           fi
