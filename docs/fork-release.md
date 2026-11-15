@@ -23,6 +23,7 @@ IPA 未签名，需要用自己的 Apple 账号通过支持的侧载工具签名
 ## 本地检查
 
 ```sh
+python3 scripts/check_message_cache_release.py
 python3 -m unittest discover -s scripts/tests -v
 python3 scripts/fork_release.py prepare
 make xcode-test-class TEST=SettingsBuildInfoTests SIMULATOR_ID=<设备编号>

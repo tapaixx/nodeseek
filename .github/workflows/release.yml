@@ -44,6 +44,10 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Validate optimized message cache
+        if: steps.existing.outputs.skip != 'true'
+        run: python3 scripts/check_message_cache_release.py
+
       - name: Test shared logic
         if: steps.existing.outputs.skip != 'true'
         run: make spm-test

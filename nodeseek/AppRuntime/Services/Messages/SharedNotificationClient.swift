@@ -68,6 +68,8 @@ private final class NotificationReadCache<Value: Sendable> {
     private var pending: (uid: Int?, id: UUID, task: Task<Value, Error>)?
     private var generation = 0
     init(ttl: TimeInterval) { self.ttl = ttl }
+    // Swift 6.2 的最佳化會在泛型類別的隱含隔離解構子崩潰，空解構子保留原有釋放行為。
+    deinit {}
     func clear() { generation += 1; cached = nil; pending?.task.cancel(); pending = nil }
     func value(scope: Int?, loader: @escaping @MainActor () async throws -> Value) async throws -> Value {
         if let cached, scope != nil, cached.uid == scope, Date().timeIntervalSince(cached.date) < ttl { return cached.value }
