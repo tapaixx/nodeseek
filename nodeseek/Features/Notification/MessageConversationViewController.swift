@@ -11,6 +11,8 @@ final class MessageConversationViewController: UIViewController, UITableViewData
     private let retryButton = UIButton(type: .system)
     private let confirmRetryButton = UIButton(type: .system)
     private let refreshControl = UIRefreshControl()
+    private let participantHeader = MessageParticipantHeaderView()
+    private var inputHeight: NSLayoutConstraint!
     private var refreshTask: Task<Void, Never>?
     private var renderedMessages: [NodeSeekDirectMessage] = []
 
@@ -18,11 +20,13 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         participantID: Int,
         participantName: String = "私信",
         client: NodeSeekMessageClientProtocol? = nil,
-        currentAccountStore: CurrentAccountStore = .shared
+        currentAccountStore: CurrentAccountStore = .shared,
+        profileClient: MessageParticipantLoading? = nil
     ) {
         model = MessageConversationViewModel(
             participantID: participantID, participantName: participantName,
-            client: client ?? NodeSeekMessageClient(), currentAccountStore: currentAccountStore
+            client: client ?? NodeSeekMessageClient(), currentAccountStore: currentAccountStore,
+            profileClient: profileClient ?? NodeSeekUserContentClient()
         )
         super.init(nibName: nil, bundle: nil)
         title = participantName
@@ -40,6 +44,7 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         model.onChange = { [weak self] in self?.render() }
         render()
         Task { [weak self] in await self?.model.load() }
+        Task { [weak self] in await self?.model.loadParticipant() }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -61,7 +66,20 @@ final class MessageConversationViewController: UIViewController, UITableViewData
     }
 
     private func configureUI() {
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .systemGroupedBackground
+        tableView.backgroundColor = .clear
+        participantHeader.profileButton.addAction(UIAction { [weak self] _ in self?.openProfile() }, for: .touchUpInside)
+        participantHeader.onExpansionChanged = { [weak self] in
+            guard let self else { return }
+            let nearBottom = tableView.contentSize.height - tableView.contentOffset.y - tableView.bounds.height < 120
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.view.layoutIfNeeded()
+                if nearBottom, !self.renderedMessages.isEmpty {
+                    self.tableView.scrollToRow(at: IndexPath(row: self.renderedMessages.count - 1, section: 0), at: .bottom, animated: false)
+                }
+            }
+        }
+        participantHeader.postButton.addAction(UIAction { [weak self] _ in self?.openLatestPost() }, for: .touchUpInside)
         tableView.accessibilityIdentifier = "message-conversation-table"
         tableView.dataSource = self
         tableView.separatorStyle = .none
@@ -89,7 +107,7 @@ final class MessageConversationViewController: UIViewController, UITableViewData
 
         input.font = .preferredFont(forTextStyle: .body)
         input.adjustsFontForContentSizeCategory = true
-        input.backgroundColor = .secondarySystemBackground
+        input.backgroundColor = .secondarySystemGroupedBackground
         input.textColor = .label
         input.layer.cornerRadius = 12
         input.textContainerInset = UIEdgeInsets(top: 10, left: 8, bottom: 10, right: 8)
@@ -109,17 +127,24 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         sendButton.setTitle("发送", for: .normal)
         sendButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
         sendButton.accessibilityIdentifier = "message-conversation-send"
+        sendButton.setContentHuggingPriority(.required, for: .horizontal)
+        sendButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        input.setContentHuggingPriority(.defaultLow, for: .horizontal)
         sendButton.addTarget(self, action: #selector(send), for: .touchUpInside)
         let composer = UIStackView(arrangedSubviews: [input, sendButton])
         composer.alignment = .bottom
         composer.spacing = 10
 
-        [status, tableView, composer].forEach {
+        inputHeight = input.heightAnchor.constraint(equalToConstant: 44)
+        [participantHeader, status, tableView, composer].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview($0)
         }
         NSLayoutConstraint.activate([
-            status.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            participantHeader.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            participantHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            participantHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            status.topAnchor.constraint(equalTo: participantHeader.bottomAnchor, constant: 4),
             status.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             status.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             tableView.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 4),
@@ -129,7 +154,7 @@ final class MessageConversationViewController: UIViewController, UITableViewData
             composer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             composer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
             composer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
-            input.heightAnchor.constraint(equalToConstant: 88),
+            inputHeight,
             sendButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 52),
             sendButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
         ])
@@ -139,11 +164,45 @@ final class MessageConversationViewController: UIViewController, UITableViewData
                 NodeSeekWebViewController(url: NodeSeekMessageClient.webURL(participantID: model.participantID)), animated: true
             )
         }
-        navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: UIMenu(children: [browser]))
+        let profile = UIAction(title: "查看对方主页", image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in self?.openProfile() }
+        let more = UIButton(type: .system)
+        more.setImage(UIImage(systemName: "ellipsis.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 22)), for: .normal)
+        more.tintColor = .label
+        more.menu = UIMenu(children: [profile, browser])
+        more.showsMenuAsPrimaryAction = true
+        more.accessibilityLabel = "聊天更多操作"
+        NSLayoutConstraint.activate([more.widthAnchor.constraint(equalToConstant: 44), more.heightAnchor.constraint(equalToConstant: 44)])
+        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: more)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        resizeInput()
+    }
+
+    private func resizeInput() {
+        guard input.bounds.width > 0 else { return }
+        let measured = input.sizeThatFits(CGSize(width: input.bounds.width, height: .greatestFiniteMagnitude)).height
+        let height = min(120, max(44, ceil(measured)))
+        input.isScrollEnabled = measured > 120
+        if abs(inputHeight.constant - height) > 0.5 { inputHeight.constant = height }
+    }
+
+    private func openProfile(uid: Int? = nil) {
+        navigationController?.pushViewController(UserProfileViewController(uid: uid ?? model.participantID), animated: true)
+    }
+
+    private func openLatestPost() {
+        guard let post = model.latestDiscussion else { return }
+        navigationController?.pushViewController(PostDetailRouter.createModule(
+            post: UserContentPostSummaryFactory.postSummary(id: post.postID, title: post.title)
+        ), animated: true)
     }
 
     private func render() {
         title = model.participantName
+        participantHeader.configure(uid: model.participantID, name: model.participantName,
+                                    profile: model.participantProfile, post: model.latestDiscussion)
         statusLabel.text = model.errorMessage ?? (model.isLoading && !model.hasLoaded ? "正在加载私信…" : nil)
         statusLabel.isHidden = statusLabel.text == nil
         retryButton.isHidden = model.errorMessage == nil
@@ -152,6 +211,7 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         input.isEditable = !model.isSending
         if input.text != model.draft { input.text = model.draft }
         placeholder.isHidden = !model.draft.isEmpty
+        resizeInput()
         sendButton.setTitle(model.isSending ? "发送中…" : "发送", for: .normal)
         sendButton.isEnabled = model.hasLoaded && !model.isSending && !model.isLoading && !model.deliveryUncertain
             && !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -175,7 +235,15 @@ final class MessageConversationViewController: UIViewController, UITableViewData
 
     @objc private func refresh() { Task { [weak self] in await self?.model.load() } }
     @objc private func confirmRetry() { model.acknowledgeUncertainDelivery() }
-    @objc private func send() { Task { [weak self] in await self?.model.send() } }
+    @objc private func send() {
+        Task { [weak self] in
+            guard let self else { return }
+            await model.send()
+            if model.draft.isEmpty, !renderedMessages.isEmpty {
+                tableView.scrollToRow(at: IndexPath(row: renderedMessages.count - 1, section: 0), at: .bottom, animated: true)
+            }
+        }
+    }
 
     func textViewDidChange(_ textView: UITextView) {
         model.draft = textView.text
@@ -189,63 +257,10 @@ final class MessageConversationViewController: UIViewController, UITableViewData
             return UITableViewCell()
         }
         let message = renderedMessages[indexPath.row]
-        cell.configure(message, isMine: message.senderID == model.currentUserID)
-        return cell
-    }
-}
-
-private final class MessageBubbleCell: UITableViewCell {
-    private let bubble = UITextView()
-    private let dateLabel = UILabel()
-    private var leading: NSLayoutConstraint!
-    private var trailing: NSLayoutConstraint!
-
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
-        backgroundColor = .clear
-        selectionStyle = .none
-        bubble.isEditable = false
-        bubble.isScrollEnabled = false
-        bubble.dataDetectorTypes = [.link]
-        bubble.layer.cornerRadius = 14
-        bubble.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
-        bubble.adjustsFontForContentSizeCategory = true
-        dateLabel.font = .preferredFont(forTextStyle: .caption2)
-        dateLabel.adjustsFontForContentSizeCategory = true
-        dateLabel.textColor = .secondaryLabel
-        [bubble, dateLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; contentView.addSubview($0) }
-        leading = bubble.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16)
-        trailing = bubble.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
-        NSLayoutConstraint.activate([
-            dateLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
-            dateLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            dateLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            bubble.topAnchor.constraint(equalTo: dateLabel.bottomAnchor, constant: 4),
-            bubble.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8),
-            bubble.widthAnchor.constraint(lessThanOrEqualTo: contentView.widthAnchor, multiplier: 0.82),
-            bubble.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 16),
-            bubble.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func configure(_ message: NodeSeekDirectMessage, isMine: Bool) {
-        leading.isActive = !isMine
-        trailing.isActive = isMine
-        bubble.backgroundColor = isMine ? .tertiarySystemFill : .secondarySystemBackground
-        let rendered: NSAttributedString
-        if message.isMarkdown, let markdown = try? AttributedString(
-            markdown: message.content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            rendered = NSAttributedString(markdown)
-        } else {
-            rendered = NSAttributedString(string: message.content)
+        let showsTimestamp = indexPath.row == 0 || message.createdAt.timeIntervalSince(renderedMessages[indexPath.row - 1].createdAt) > 300
+        cell.configure(message, isMine: message.senderID == model.currentUserID, showsTimestamp: showsTimestamp, availableWidth: tableView.bounds.width) { [weak self] uid in
+            self?.openProfile(uid: uid)
         }
-        let text = NSMutableAttributedString(attributedString: rendered)
-        text.addAttributes([.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label], range: NSRange(location: 0, length: text.length))
-        bubble.attributedText = text
-        dateLabel.text = (isMine ? "我 · " : "") + NodeSeekNotificationDateParser.displayText(from: message.createdAt)
-        dateLabel.textAlignment = isMine ? .right : .left
+        return cell
     }
 }

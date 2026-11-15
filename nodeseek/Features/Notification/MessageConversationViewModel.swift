@@ -11,22 +11,43 @@ final class MessageConversationViewModel {
     private(set) var hasLoaded = false
     private(set) var errorMessage: String?
     private(set) var deliveryUncertain = false
+    private(set) var participantProfile: UserProfileRecord?
+    private(set) var latestDiscussion: UserDiscussionRecord?
     var draft = ""
     var onChange: (() -> Void)?
     private let client: NodeSeekMessageClientProtocol
     private let currentAccountStore: CurrentAccountStore
+    private let profileClient: MessageParticipantLoading?
     private var markedIDs: Set<Int> = []
 
     init(
         participantID: Int,
         participantName: String = "私信",
         client: NodeSeekMessageClientProtocol,
-        currentAccountStore: CurrentAccountStore = .shared
+        currentAccountStore: CurrentAccountStore = .shared,
+        profileClient: MessageParticipantLoading? = nil
     ) {
         self.participantID = participantID
         self.participantName = participantName
         self.client = client
         self.currentAccountStore = currentAccountStore
+        self.profileClient = profileClient
+    }
+
+    func loadParticipant() async {
+        guard let profileClient else { return }
+        do {
+            async let profile = profileClient.loadProfile(uid: participantID)
+            async let discussions = try? profileClient.loadDiscussions(uid: participantID, page: 1)
+            let loaded = try await profile
+            guard loaded.uid == participantID, !Task.isCancelled else { return }
+            participantProfile = loaded
+            participantName = loaded.name
+            latestDiscussion = await discussions?.first
+            onChange?()
+        } catch {
+            // 資料卡失敗不應阻止讀取與發送私信，使用者仍可進入完整個人頁重試。
+        }
     }
 
     func load() async {

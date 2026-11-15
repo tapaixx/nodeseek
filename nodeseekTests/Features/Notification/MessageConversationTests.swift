@@ -152,7 +152,7 @@ final class MessageConversationTests: XCTestCase {
         for style in [UIUserInterfaceStyle.light, .dark] {
             let client = StubMessageClient()
             let store = await makeStore()
-            let controller = MessageConversationViewController(participantID: 20, participantName: "Alice", client: client, currentAccountStore: store)
+            let controller = MessageConversationViewController(participantID: 20, participantName: "Alice", client: client, currentAccountStore: store, profileClient: StubMessageParticipantClient())
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
@@ -165,21 +165,80 @@ final class MessageConversationTests: XCTestCase {
                 await Task.yield()
             }
             XCTAssertTrue(controller.model.hasLoaded)
+            await controller.model.loadParticipant()
             controller.model.draft = "在应用内直接回复"
             controller.model.onChange?()
             window.layoutIfNeeded()
             let input = try XCTUnwrap(findView(in: controller.view, identifier: "message-conversation-input") as? UITextView)
             XCTAssertGreaterThan(input.frame.height, 40)
+            XCTAssertGreaterThan(input.frame.width, window.bounds.width * 0.6)
             XCTAssertLessThanOrEqual(input.convert(input.bounds, to: window).maxY, window.bounds.maxY)
             let table = try XCTUnwrap(findView(in: controller.view, identifier: "message-conversation-table") as? UITableView)
             XCTAssertEqual(table.numberOfRows(inSection: 0), 2)
-            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in window.layer.render(in: context.cgContext) }
+            let profile = try XCTUnwrap(findView(in: controller.view, identifier: "message-participant-profile") as? UIControl)
+            XCTAssertTrue(profile.accessibilityLabel?.contains("Lv.3") == true)
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
             let attachment = XCTAttachment(image: image)
-            attachment.name = style == .light ? "message-light" : "message-dark"
+            attachment.name = style == .light ? "message-light-collapsed" : "message-dark-collapsed"
             attachment.lifetime = .keepAlways
             add(attachment)
+            let toggle = try XCTUnwrap(findView(in: controller.view, identifier: "message-participant-toggle") as? UIButton)
+            XCTAssertEqual(toggle.accessibilityValue, "已收起")
+            UIView.performWithoutAnimation { toggle.sendActions(for: .touchUpInside); window.layoutIfNeeded() }
+            XCTAssertEqual(toggle.accessibilityValue, "已展开")
+            let expandedImage = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let expanded = XCTAttachment(image: expandedImage)
+            expanded.name = style == .light ? "message-light-expanded" : "message-dark-expanded"
+            expanded.lifetime = .keepAlways
+            add(expanded)
             window.isHidden = true
         }
+    }
+
+    func testParticipantProfileAndLatestPostDoNotDependOnConversationLoading() async throws {
+        let client = StubMessageClient()
+        client.loadError = URLError(.notConnectedToInternet)
+        let model = MessageConversationViewModel(participantID: 20, client: client, currentAccountStore: await makeStore(), profileClient: StubMessageParticipantClient())
+        await model.loadParticipant()
+        XCTAssertEqual(model.participantProfile?.uid, 20)
+        XCTAssertEqual(model.participantProfile?.rank, 3)
+        XCTAssertEqual(model.latestDiscussion?.postID, 123)
+        XCTAssertFalse(model.hasLoaded)
+    }
+
+    func testParticipantCardAndAvatarOpenNativeProfile() async throws {
+        let controller = MessageConversationViewController(participantID: 20, client: StubMessageClient(), currentAccountStore: await makeStore(), profileClient: StubMessageParticipantClient())
+        let navigation = UINavigationController(rootViewController: controller)
+        controller.loadViewIfNeeded()
+        let toggle = try XCTUnwrap(findView(in: controller.view, identifier: "message-participant-toggle") as? UIButton)
+        toggle.sendActions(for: .touchUpInside)
+        let profile = try XCTUnwrap(findView(in: controller.view, identifier: "message-participant-profile") as? UIControl)
+        profile.sendActions(for: .touchUpInside)
+        XCTAssertTrue(navigation.topViewController is UserProfileViewController)
+    }
+
+    func testBubbleWidthFollowsTextAndAvatarStaysOnItsSide() throws {
+        func message(_ content: String) throws -> NodeSeekDirectMessage {
+            let data = try JSONSerialization.data(withJSONObject: ["id": 1, "sender_id": 20, "receiver_id": 10, "content": content, "created_at": "2026-11-15T01:00:00Z"])
+            return try JSONDecoder().decode(NodeSeekDirectMessage.self, from: data)
+        }
+        let cell = MessageBubbleCell(style: .default, reuseIdentifier: nil)
+        cell.frame = CGRect(x: 0, y: 0, width: 390, height: 140)
+        cell.configure(try message("你好"), isMine: false, showsTimestamp: false, availableWidth: 390, onProfile: { _ in })
+        cell.layoutIfNeeded()
+        let bubble = try XCTUnwrap(cell.contentView.subviews.first { $0 is UITextView })
+        let avatar = try XCTUnwrap(findView(in: cell.contentView, identifier: "message-sender-avatar"))
+        XCTAssertLessThan(bubble.frame.width, 120)
+        XCTAssertLessThanOrEqual(avatar.frame.maxX, bubble.frame.minX)
+        cell.configure(try message(String(repeating: "这是较长的私信内容", count: 12)), isMine: true, showsTimestamp: false, availableWidth: 390, onProfile: { _ in })
+        cell.layoutIfNeeded()
+        XCTAssertGreaterThan(bubble.frame.width, 200)
+        XCTAssertLessThanOrEqual(bubble.frame.width, 390 * 0.72 + 1)
+        XCTAssertLessThanOrEqual(bubble.frame.maxX, avatar.frame.minX)
     }
 
     private func findView(in view: UIView, identifier: String) -> UIView? {
@@ -231,7 +290,7 @@ private final class StubMessageClient: NodeSeekMessageClientProtocol {
         return try JSONDecoder().decode(NodeSeekMessageThread.self, from: Data("""
         {"success":true,"talkTo":{"member_id":20,"member_name":"Alice"},"msgArray":[
           {"id":1,"sender_id":20,"receiver_id":10,"content":"你好，私信可以直接在应用里查看吗？\\nhttps://www.nodeseek.com","created_at":"2026-11-15T01:00:00Z","viewed":0,"is_markdown":false},
-          {"id":2,"sender_id":10,"receiver_id":20,"content":"可以，**原生对话**支持查看历史消息和直接回复。","created_at":"2026-11-15T01:00:10Z","viewed":0,"is_markdown":true}
+          {"id":2,"sender_id":10,"receiver_id":20,"content":"可以，直接回复。","created_at":"2026-11-15T01:00:10Z","viewed":0,"is_markdown":true}
         ]}
         """.utf8))
     }
@@ -243,4 +302,14 @@ private final class StubMessageClient: NodeSeekMessageClientProtocol {
     }
 
     func markViewed(ids: [Int]) async throws { markedIDs.append(ids) }
+}
+
+@MainActor
+private final class StubMessageParticipantClient: MessageParticipantLoading {
+    func loadProfile(uid: Int) async throws -> UserProfileRecord {
+        UserProfileRecord(uid: uid, name: "Alice", rank: 3, coin: 1200, stardust: 10, bio: "交流服务器与网络", readme: "", createdAt: Date(timeIntervalSince1970: 1_700_000_000), postCount: 12, commentCount: 100, follows: 2, fans: 8, collectionCount: nil, roleNames: [])
+    }
+    func loadDiscussions(uid: Int, page: Int) async throws -> [UserDiscussionRecord] {
+        [UserDiscussionRecord(rank: 0, title: "最近在用的几台 VPS，分享一些体验", postID: 123)]
+    }
 }
