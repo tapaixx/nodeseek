@@ -39,10 +39,18 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         handle(urlContexts: URLContexts)
     }
 
-    /// 目前只有小组件会用 nsconnect:// 打开 App。
+    /// 小工具與 Bark 共用外部連結入口，路由分別驗證。
     private func handle(urlContexts: Set<UIOpenURLContext>) {
-        guard let link = urlContexts.lazy.compactMap({ ProbeWidgetLink(url: $0.url) }).first else { return }
-        PushNotificationDeepLink.handle(.probe(link))
+        for context in urlContexts {
+            if let link = ProbeWidgetLink(url: context.url) {
+                PushNotificationDeepLink.handle(.probe(link))
+                return
+            }
+            if let route = ExternalPushLink.route(from: context.url) {
+                PushNotificationDeepLink.handle(route)
+                return
+            }
+        }
     }
 
     private func presentOnboarding(from root: UIViewController, in window: UIWindow) {

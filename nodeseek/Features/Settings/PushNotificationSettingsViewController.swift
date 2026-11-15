@@ -1,15 +1,17 @@
 import UIKit
 import UserNotifications
+import SafariServices
 
 enum PushNotificationSettingsCopy {
-    static let nsApnsRepositoryURL = URL(string: "https://github.com/tyrad/ns-apns")!
+    static let nsApnsRepositoryURL = URL(string: "https://github.com/nnnmdzz/ns-apns")!
     static let setupSteps = """
-    1. 使用 Telegram，并已绑定官方 Bot 接收通知
-    2. 在本 App 开启推送通知
-    3. 自行私有部署 ns-apns，步骤见下方仓库文档
+    1. 在 NodeSeek 绑定官方 Telegram「新提醒」
+    2. 自行部署 ns-apns，在服务中完成登录
+    3. 选择 App 推送、企业微信机器人或 Bark，可同时启用
     """
 
-    static func listSummary(for status: UNAuthorizationStatus) -> String {
+    static func listSummary(for status: UNAuthorizationStatus, relayConfigured: Bool = false) -> String {
+        if relayConfigured { return "已配置推送服务" }
         switch status {
         case .notDetermined:
             return "未开启"
@@ -42,6 +44,7 @@ enum PushNotificationSettingsCopy {
 final class PushNotificationSettingsViewController: UITableViewController {
     private enum Section: Int, CaseIterable {
         case steps
+        case channels
         case permission
         case token
         case nsApns
@@ -63,6 +66,8 @@ final class PushNotificationSettingsViewController: UITableViewController {
         case github
     }
 
+    private let relayStore: PushRelaySettingsStore
+    private let openRelay: ((URL) -> Void)?
     private let tokenStore: PushNotificationTokenStore
     private let notificationCenter: UNUserNotificationCenter
     private let application: UIApplication
@@ -71,12 +76,16 @@ final class PushNotificationSettingsViewController: UITableViewController {
 
     init(
         tokenStore: PushNotificationTokenStore = .shared,
+        relayStore: PushRelaySettingsStore = .shared,
+        openRelay: ((URL) -> Void)? = nil,
         notificationCenter: UNUserNotificationCenter = .current(),
         application: UIApplication = .shared,
         authorizationStatusProvider: @escaping @MainActor () async -> UNAuthorizationStatus = {
             await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         }
     ) {
+        self.relayStore = relayStore
+        self.openRelay = openRelay
         self.tokenStore = tokenStore
         self.notificationCenter = notificationCenter
         self.application = application
@@ -127,6 +136,8 @@ final class PushNotificationSettingsViewController: UITableViewController {
             return TokenRow.allCases.count
         case .nsApns:
             return NsApnsRow.allCases.count
+        case .channels:
+            return 3
         case .none:
             return 0
         }
@@ -137,11 +148,13 @@ final class PushNotificationSettingsViewController: UITableViewController {
         case .steps:
             return "使用步骤"
         case .permission:
-            return "系统权限"
+            return "App 推送 · 系统权限"
         case .token:
             return "Device Token"
         case .nsApns:
-            return "ns-apns"
+            return "部署与维护"
+        case .channels:
+            return "其他通知渠道"
         case .none:
             return nil
         }
@@ -156,7 +169,9 @@ final class PushNotificationSettingsViewController: UITableViewController {
         case .token:
             return "复制后粘贴到 ns-apns 设置页的 Device Token。换机或重装后需要重新获取。"
         case .nsApns:
-            return "本 App 不托管推送。部署完成后，把上方 Token 填进 ns-apns 设置页。"
+            return "在 ns-apns 中维护登录状态与通知渠道。仅 App 推送需要填写 Device Token。"
+        case .channels:
+            return "企业微信与 Bark 由常驻服务转发，App 关闭后仍可接收，无需 Device Token。密钥仅在服务设置页维护。"
         case .none:
             return nil
         }
@@ -172,6 +187,8 @@ final class PushNotificationSettingsViewController: UITableViewController {
             return tokenCell(for: TokenRow(rawValue: indexPath.row))
         case .nsApns:
             return nsApnsCell(for: NsApnsRow(rawValue: indexPath.row))
+        case .channels:
+            return channelCell(row: indexPath.row)
         case .none:
             return UITableViewCell()
         }
@@ -200,6 +217,9 @@ final class PushNotificationSettingsViewController: UITableViewController {
             case .value, .none:
                 break
             }
+        case .channels:
+            if indexPath.row == 0 { editRelayAddress() }
+            else { openChannel(indexPath.row == 1 ? "wecom" : "bark") }
         case .nsApns:
             switch NsApnsRow(rawValue: indexPath.row) {
             case .github:
@@ -317,6 +337,60 @@ final class PushNotificationSettingsViewController: UITableViewController {
         }
 
         return cell
+    }
+
+
+    private func channelCell(row: Int) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.textLabel?.textColor = .label
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.detailTextLabel?.numberOfLines = 0
+        cell.accessoryType = .disclosureIndicator
+        cell.textLabel?.text = ["推送服务地址", "企业微信机器人", "Bark"][row]
+        cell.detailTextLabel?.text = row == 0
+            ? (relayStore.baseURL?.absoluteString ?? "填写已部署的 ns-apns 地址")
+            : (row == 1 ? "配置 Webhook、启用或停用、发送测试通知" : "支持官方与自架服务，点击通知可回到 App")
+        cell.imageView?.image = UIImage(systemName: ["server.rack", "bubble.left.and.bubble.right", "bell.badge"][row])
+        cell.accessibilityIdentifier = ["push-relay-address", "push-channel-wecom", "push-channel-bark"][row]
+        return cell
+    }
+
+    private func editRelayAddress(channel: String? = nil) {
+        let alert = UIAlertController(title: "推送服务地址", message: "填写已部署的 ns-apns HTTPS 地址。Webhook 和 Bark 推送地址请在对应渠道页面填写。", preferredStyle: .alert)
+        alert.addTextField {
+            $0.placeholder = "https://notify.example.com"
+            $0.text = self.relayStore.baseURL?.absoluteString
+            $0.keyboardType = .URL
+            $0.autocapitalizationType = .none
+            $0.autocorrectionType = .no
+            $0.accessibilityIdentifier = "push-relay-address-input"
+        }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "保存", style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            let raw = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard raw.isEmpty || PushRelayAddress.normalized(raw) != nil else {
+                let error = UIAlertController(title: "地址格式有误", message: "请输入不含账号密码、路径或密钥的 HTTPS 服务地址。", preferredStyle: .alert)
+                error.addAction(UIAlertAction(title: "重新填写", style: .default) { [weak self] _ in self?.editRelayAddress(channel: channel) })
+                error.addAction(UIAlertAction(title: "取消", style: .cancel))
+                self.present(error, animated: true)
+                return
+            }
+            self.relayStore.save(PushRelayAddress.normalized(raw))
+            self.tableView.reloadSections(IndexSet(integer: Section.channels.rawValue), with: .none)
+            if let channel, !raw.isEmpty { self.openChannel(channel) }
+        })
+        present(alert, animated: true)
+    }
+
+    private func openChannel(_ channel: String) {
+        guard let base = relayStore.baseURL,
+              let url = PushRelayAddress.settingsURL(base: base, channel: channel) else {
+            editRelayAddress(channel: channel)
+            return
+        }
+        if let openRelay { openRelay(url) }
+        else { present(SFSafariViewController(url: url), animated: true) }
     }
 
     private var statusText: String {
