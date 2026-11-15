@@ -30,7 +30,7 @@ struct PushNotificationSettingsViewControllerTests {
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
             titleForHeaderInSection: 4
-        ) == "部署与维护")
+        ) == "原有 App 推送（可选）")
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
             titleForFooterInSection: 2
@@ -42,7 +42,7 @@ struct PushNotificationSettingsViewControllerTests {
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
             titleForFooterInSection: 4
-        ) == "在 ns-apns 中维护登录状态与通知渠道。仅 App 推送需要填写 Device Token。")
+        ) == "仅原有 APNs 方式使用 ns-apns；企业微信与 Bark 直接连接，不需要此服务或 Device Token。")
 
         let stepsCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
@@ -120,9 +120,9 @@ struct PushNotificationSettingsViewControllerTests {
         #expect(PushNotificationSettingsCopy.statusText(for: .provisional) == "临时开启")
         #expect(PushNotificationSettingsCopy.statusText(for: .ephemeral) == "临时开启")
         #expect(PushNotificationSettingsCopy.nsApnsRepositoryURL.absoluteString == "https://github.com/nnnmdzz/ns-apns")
-        #expect(PushNotificationSettingsCopy.setupSteps.contains("官方 Telegram"))
+        #expect(PushNotificationSettingsCopy.setupSteps.contains("无需另行部署服务"))
         #expect(PushNotificationSettingsCopy.setupSteps.contains("企业微信机器人或 Bark"))
-        #expect(PushNotificationSettingsCopy.setupSteps.contains("自行部署 ns-apns"))
+        #expect(PushNotificationSettingsCopy.setupSteps.contains("发送测试通知"))
     }
 }
 

@@ -69,6 +69,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        DirectPushMonitor.shared.start()
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard let presentationContext = self.autoCheckInPresentationContext() else { return }
@@ -88,6 +89,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
+        DirectPushMonitor.shared.stop()
+        DirectPushBackground.schedule()
         VisitedPostStore.shared.flush()
     }
 

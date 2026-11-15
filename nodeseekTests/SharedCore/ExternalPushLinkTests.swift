@@ -43,13 +43,4 @@ struct ExternalPushLinkTests {
         #expect(ExternalPushLink.route(from: URL(string: raw)! ) == nil)
     }
 
-    @Test func relayAddressContainsNoSecretsAndBuildsChannelURL() throws {
-        let base = try #require(PushRelayAddress.normalized(" https://notify.example.com/ "))
-        #expect(base.absoluteString == "https://notify.example.com")
-        #expect(PushRelayAddress.settingsURL(base: base, channel: "bark")?.absoluteString == "https://notify.example.com/channels#bark")
-        for raw in ["https://notify.example.com/key", "https://user:pass@notify.example.com", "https://notify.example.com?key=secret", "http://notify.example.com"] {
-            #expect(PushRelayAddress.normalized(raw) == nil)
-        }
-        #expect(PushRelayAddress.normalized("http://127.0.0.1:8787") != nil)
-    }
 }

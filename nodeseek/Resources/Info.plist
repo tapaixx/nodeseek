@@ -57,5 +57,13 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.mistj.nodeseek.direct-push-refresh</string>
+	</array>
 </dict>
 </plist>

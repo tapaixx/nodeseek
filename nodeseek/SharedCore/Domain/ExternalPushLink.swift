@@ -29,24 +29,3 @@ enum ExternalPushLink {
         url.path.range(of: #"^/post-[0-9]+(?:-[0-9]+)?$"#, options: .regularExpression) != nil
     }
 }
-
-enum PushRelayAddress {
-    nonisolated static func normalized(_ raw: String) -> URL? {
-        guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil,
-              url.query == nil, url.fragment == nil,
-              url.path.isEmpty || url.path == "/",
-              url.scheme == "https" || (url.scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(host)) else { return nil }
-        var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        parts?.path = ""
-        return parts?.url
-    }
-
-    nonisolated static func settingsURL(base: URL, channel: String) -> URL? {
-        guard ["wecom", "bark"].contains(channel), normalized(base.absoluteString) != nil else { return nil }
-        var parts = URLComponents(url: base, resolvingAgainstBaseURL: false)
-        parts?.path = "/channels"
-        parts?.fragment = channel
-        return parts?.url
-    }
-}

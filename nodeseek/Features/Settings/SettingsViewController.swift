@@ -566,7 +566,7 @@ class SettingsViewController: UITableViewController {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         cell.textLabel?.textColor = ReadingColors.text
         cell.textLabel?.text = "推送通知"
-        cell.detailTextLabel?.text = PushNotificationSettingsCopy.listSummary(for: pushAuthorizationStatus, relayConfigured: PushRelaySettingsStore.shared.baseURL != nil)
+        cell.detailTextLabel?.text = PushNotificationSettingsCopy.listSummary(for: pushAuthorizationStatus, directConfigured: DirectPushChannel.allCases.contains { DirectPushStore.shared.configuration($0)?.enabled == true })
         cell.detailTextLabel?.textColor = .secondaryLabel
         cell.imageView?.image = UIImage(systemName: "bell")
         cell.accessoryType = .disclosureIndicator
