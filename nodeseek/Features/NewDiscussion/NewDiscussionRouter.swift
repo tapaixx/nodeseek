@@ -25,7 +25,7 @@ final class NewDiscussionRouter: NewDiscussionRouterProtocol {
         presenter.view = view
         router.viewController = view
 
-        let navigationController = UINavigationController(rootViewController: view)
+        let navigationController = MessageNavigationController(rootViewController: view)
         navigationController.modalPresentationStyle = .fullScreen
         return navigationController
     }
@@ -72,7 +72,7 @@ final class NewDiscussionRouter: NewDiscussionRouterProtocol {
         presenter.view = view
         router.viewController = view
 
-        let navigationController = UINavigationController(rootViewController: view)
+        let navigationController = MessageNavigationController(rootViewController: view)
         navigationController.modalPresentationStyle = .fullScreen
         return navigationController
     }

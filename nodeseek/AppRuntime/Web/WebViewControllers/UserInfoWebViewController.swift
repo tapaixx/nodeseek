@@ -84,7 +84,7 @@ final class UserInfoWebViewController: BaseWebViewController {
         if let navigationController {
             navigationController.pushViewController(viewController, animated: true)
         } else {
-            present(UINavigationController(rootViewController: viewController), animated: true)
+            present(MessageNavigationController(rootViewController: viewController), animated: true)
         }
     }
 

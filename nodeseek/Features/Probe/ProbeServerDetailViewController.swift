@@ -231,6 +231,8 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
         configureMenu(entry)
     }
 
+    private var moreButton: UIBarButtonItem?
+
     private func configureMenu(_ entry: ProbeListEntry) {
         let menu = UIMenu(children: [
             UIAction(title: "重命名", image: UIImage(systemName: "pencil")) { [weak self] _ in
@@ -242,12 +244,13 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
                 self?.navigationController?.popViewController(animated: true)
             },
         ])
-        if navigationItem.rightBarButtonItem == nil {
-            navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: menu)
-            navigationItem.rightBarButtonItem?.accessibilityLabel = "更多"
+        if moreButton == nil {
+            moreButton = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: menu)
+            moreButton?.accessibilityLabel = "更多"
         } else {
-            navigationItem.rightBarButtonItem?.menu = menu
+            moreButton?.menu = menu
         }
+        navigationItem.rightBarButtonItem = moreButton
     }
 
     private func renderPlan(_ entry: ProbeListEntry, metrics: ProbeMetrics?) {

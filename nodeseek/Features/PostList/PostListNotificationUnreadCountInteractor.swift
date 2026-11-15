@@ -12,7 +12,7 @@ final class PostListNotificationUnreadCountInteractor: PostListNotificationUnrea
     private let client: NodeSeekNotificationClientProtocol
 
     init(client: NodeSeekNotificationClientProtocol? = nil) {
-        self.client = client ?? NodeSeekNotificationClient()
+        self.client = client ?? SharedNotificationClient.shared
     }
 
     @MainActor

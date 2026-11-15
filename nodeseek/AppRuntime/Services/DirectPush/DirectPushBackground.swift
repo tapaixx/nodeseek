@@ -7,7 +7,10 @@ enum DirectPushBackground {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
             Task { @MainActor in
                 schedule()
-                let work = Task { await DirectPushMonitor.shared.check() }
+                let work = Task {
+                    await AppMessageCenter.shared.refresh()
+                    if !Task.isCancelled { await DirectPushMonitor.shared.check() }
+                }
                 task.expirationHandler = { work.cancel() }
                 await work.value
                 task.setTaskCompleted(success: !work.isCancelled)
@@ -15,7 +18,7 @@ enum DirectPushBackground {
         }
     }
     static func schedule() {
-        guard DirectPushChannel.allCases.contains(where: { DirectPushStore.shared.configuration($0)?.enabled == true }) else { return }
+        guard AppMessageCenter.shared.alertsEnabled || DirectPushChannel.allCases.contains(where: { DirectPushStore.shared.configuration($0)?.enabled == true }) else { return }
         let request = BGAppRefreshTaskRequest(identifier: identifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         try? BGTaskScheduler.shared.submit(request)

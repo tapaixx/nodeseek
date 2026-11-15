@@ -173,7 +173,7 @@ class PostListRouter: PostListRouterProtocol {
             return
         }
 
-        let navigationWrapper = UINavigationController(rootViewController: targetViewController)
+        let navigationWrapper = MessageNavigationController(rootViewController: targetViewController)
         viewController?.present(navigationWrapper, animated: true)
     }
 

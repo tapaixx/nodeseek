@@ -65,7 +65,7 @@ class PostDetailRouter: PostDetailRouterProtocol {
             return
         }
 
-        let navigationWrapper = UINavigationController(rootViewController: loginViewController)
+        let navigationWrapper = MessageNavigationController(rootViewController: loginViewController)
         viewController?.present(navigationWrapper, animated: true)
     }
 }

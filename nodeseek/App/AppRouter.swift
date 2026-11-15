@@ -40,9 +40,9 @@ final class AppRouter {
         let root: UIViewController
         switch layoutSettings.layout {
         case .reading:
-            root = UINavigationController(rootViewController: PostListRouter.createModule())
+            root = MessageNavigationController(rootViewController: PostListRouter.createModule())
         case .tabs:
-            root = UINavigationController(rootViewController: MainTabBarController())
+            root = MessageNavigationController(rootViewController: MainTabBarController())
         }
         rootViewController = root
         PushNotificationDeepLink.attach(self)

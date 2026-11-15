@@ -254,7 +254,7 @@ final class ProbeMonitorViewController: UIViewController {
 
     private func presentEditor(for instanceID: UUID?) {
         let editor = ProbeInstanceEditorViewController(instance: instanceID.flatMap(viewModel.instance(id:)), store: viewModel.store)
-        present(UINavigationController(rootViewController: editor), animated: true)
+        present(MessageNavigationController(rootViewController: editor), animated: true)
     }
 
     /// 小组件点按：进探针列表，带服务器时再进它的详情。已经停在探针页时复用它，避免每点一次就多压一层。

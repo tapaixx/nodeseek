@@ -44,6 +44,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             completionHandler([.banner, .sound, .list])
             return
         }
+        AppMessageCenter.shared.noteRemote(userInfo: userInfo)
         if UIApplication.shared.applicationState == .active {
             PushNotificationForegroundEcho.schedule(from: notification)
             completionHandler([])

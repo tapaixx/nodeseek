@@ -184,7 +184,7 @@ extension PostDetailViewController {
             navigationController.pushViewController(loginViewController, animated: true)
             return
         }
-        present(UINavigationController(rootViewController: loginViewController), animated: true)
+        present(MessageNavigationController(rootViewController: loginViewController), animated: true)
     }
 
     nonisolated static func trimmedNonEmpty(_ text: String) -> String? {

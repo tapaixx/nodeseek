@@ -119,7 +119,7 @@ final class NewDiscussionImageUploader: NSObject {
                 self?.presentSourceOptions()
             }
         }
-        presentingViewController?.present(UINavigationController(rootViewController: authViewController), animated: true)
+        presentingViewController?.present(MessageNavigationController(rootViewController: authViewController), animated: true)
     }
 
     private func presentSourceOptions() {

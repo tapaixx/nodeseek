@@ -22,7 +22,7 @@ extension PostDetailViewController {
             if let navigationController {
                 navigationController.pushViewController(webViewController, animated: true)
             } else {
-                let navigationWrapper = UINavigationController(rootViewController: webViewController)
+                let navigationWrapper = MessageNavigationController(rootViewController: webViewController)
                 present(navigationWrapper, animated: true)
             }
             return
@@ -368,7 +368,7 @@ extension PostDetailViewController {
         if let navigationController {
             navigationController.pushViewController(viewController, animated: true)
         } else {
-            present(UINavigationController(rootViewController: viewController), animated: true)
+            present(MessageNavigationController(rootViewController: viewController), animated: true)
         }
     }
 

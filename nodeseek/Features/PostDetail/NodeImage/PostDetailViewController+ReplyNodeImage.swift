@@ -49,7 +49,7 @@ extension PostDetailViewController {
                 self?.presentImagePicker()
             }
         }
-        present(UINavigationController(rootViewController: authViewController), animated: true)
+        present(MessageNavigationController(rootViewController: authViewController), animated: true)
     }
 
     func presentImagePicker() {

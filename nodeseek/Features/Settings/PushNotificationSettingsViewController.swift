@@ -43,6 +43,7 @@ enum PushNotificationSettingsCopy {
 final class PushNotificationSettingsViewController: UITableViewController {
     private enum Section: Int, CaseIterable {
         case steps
+        case inApp
         case channels
         case permission
         case token
@@ -65,6 +66,7 @@ final class PushNotificationSettingsViewController: UITableViewController {
         case github
     }
 
+    private let messageCenter: AppMessageCenter
     private let directStore: DirectPushStoring
     private let tokenStore: PushNotificationTokenStore
     private let notificationCenter: UNUserNotificationCenter
@@ -74,6 +76,7 @@ final class PushNotificationSettingsViewController: UITableViewController {
 
     init(
         tokenStore: PushNotificationTokenStore = .shared,
+        messageCenter: AppMessageCenter? = nil,
         directStore: DirectPushStoring = DirectPushStore.shared,
         notificationCenter: UNUserNotificationCenter = .current(),
         application: UIApplication = .shared,
@@ -81,6 +84,7 @@ final class PushNotificationSettingsViewController: UITableViewController {
             await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         }
     ) {
+        self.messageCenter = messageCenter ?? .shared
         self.directStore = directStore
         self.tokenStore = tokenStore
         self.notificationCenter = notificationCenter
@@ -124,7 +128,7 @@ final class PushNotificationSettingsViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch Section(rawValue: section) {
-        case .steps:
+        case .steps, .inApp:
             return 1
         case .permission:
             return visiblePermissionRows().count
@@ -143,6 +147,8 @@ final class PushNotificationSettingsViewController: UITableViewController {
         switch Section(rawValue: section) {
         case .steps:
             return "使用步骤"
+        case .inApp:
+            return "消息提醒"
         case .permission:
             return "App 推送 · 系统权限"
         case .token:
@@ -160,6 +166,8 @@ final class PushNotificationSettingsViewController: UITableViewController {
         switch Section(rawValue: section) {
         case .steps:
             return nil
+        case .inApp:
+            return "所有页面右上角均可打开消息。前台约每 20 秒检查一次，显示未读角标与可点击提醒；关闭提醒仍保留消息入口。后台通知需开启系统权限，刷新时间由 iOS 决定，强制关闭 App 后不继续检查。"
         case .permission:
             return "不会在打开本页时弹窗，只有点「开启通知」才会向系统申请。"
         case .token:
@@ -177,6 +185,19 @@ final class PushNotificationSettingsViewController: UITableViewController {
         switch Section(rawValue: indexPath.section) {
         case .steps:
             return stepsCell()
+        case .inApp:
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            cell.textLabel?.text = "新消息提醒"
+            let toggle = UISwitch()
+            toggle.isOn = messageCenter.alertsEnabled
+            toggle.accessibilityIdentifier = "app-message-alerts-switch"
+            toggle.addAction(UIAction { [weak self, weak toggle] _ in
+                guard let self, let toggle else { return }
+                messageCenter.alertsEnabled = toggle.isOn
+            }, for: .valueChanged)
+            cell.accessoryView = toggle
+            cell.selectionStyle = .none
+            return cell
         case .permission:
             return permissionCell(for: visiblePermissionRows()[indexPath.row])
         case .token:
@@ -193,7 +214,7 @@ final class PushNotificationSettingsViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         switch Section(rawValue: indexPath.section) {
-        case .steps:
+        case .steps, .inApp:
             break
         case .permission:
             switch visiblePermissionRows()[indexPath.row] {
@@ -366,11 +387,11 @@ final class PushNotificationSettingsViewController: UITableViewController {
         }
     }
 
-    private func requestAuthorizationThenRegister() {
+    private func requestAuthorizationThenRegister(registerRemote: Bool = false) {
         notificationCenter.requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] granted, _ in
             DispatchQueue.main.async {
                 self?.refreshAuthorizationStatus()
-                if granted {
+                if granted && registerRemote {
                     self?.application.registerForRemoteNotifications()
                 }
             }
@@ -380,7 +401,7 @@ final class PushNotificationSettingsViewController: UITableViewController {
     private func fetchToken() {
         switch authorizationStatus {
         case .notDetermined:
-            requestAuthorizationThenRegister()
+            requestAuthorizationThenRegister(registerRemote: true)
         case .denied:
             openSystemSettings()
         default:

@@ -56,6 +56,12 @@ final class CommentCopySheetViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         selectAllTextAfterPresentationIfNeeded()
+        AppMessageCenter.shared.updatePresentation()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        AppMessageCenter.shared.updatePresentation()
     }
 
     func copySelection() {

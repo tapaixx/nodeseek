@@ -63,7 +63,7 @@ final class NewDiscussionWebViewController: BaseWebViewController {
                 navigationController.pushViewController(loginViewController, animated: true)
                 return
             }
-            self?.present(UINavigationController(rootViewController: loginViewController), animated: true)
+            self?.present(MessageNavigationController(rootViewController: loginViewController), animated: true)
         })
         present(alert, animated: true)
     }

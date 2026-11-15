@@ -118,6 +118,11 @@ final class DetailPhotoBrowserController: JXPhotoBrowserViewController {
     var prepareForDismiss: (() -> Void)?
     var onDidLeave: (() -> Void)?
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        AppMessageCenter.shared.updatePresentation()
+    }
+
     override func dismissSelf() {
         prepareForDismiss?()
         super.dismissSelf()

@@ -10,38 +10,38 @@ struct PushNotificationSettingsViewControllerTests {
         viewController.loadViewIfNeeded()
 
         #expect(viewController.title == "推送通知")
-        #expect(viewController.tableView.numberOfSections == 5)
+        #expect(viewController.tableView.numberOfSections == 6)
         #expect(viewController.tableView.numberOfRows(inSection: 0) == 1)
-        #expect(viewController.tableView.numberOfRows(inSection: 2) == 2)
-        #expect(viewController.tableView.numberOfRows(inSection: 3) == 3)
-        #expect(viewController.tableView.numberOfRows(inSection: 4) == 1)
+        #expect(viewController.tableView.numberOfRows(inSection: 3) == 2)
+        #expect(viewController.tableView.numberOfRows(inSection: 4) == 3)
+        #expect(viewController.tableView.numberOfRows(inSection: 5) == 1)
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
             titleForHeaderInSection: 0
         ) == "使用步骤")
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
-            titleForHeaderInSection: 2
+            titleForHeaderInSection: 3
         ) == "App 推送 · 系统权限")
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
-            titleForHeaderInSection: 3
+            titleForHeaderInSection: 4
         ) == "Device Token")
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
-            titleForHeaderInSection: 4
+            titleForHeaderInSection: 5
         ) == "原有 App 推送（可选）")
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
-            titleForFooterInSection: 2
+            titleForFooterInSection: 3
         ) == "不会在打开本页时弹窗，只有点「开启通知」才会向系统申请。")
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
-            titleForFooterInSection: 3
+            titleForFooterInSection: 4
         ) == "复制后粘贴到 ns-apns 设置页的 Device Token。换机或重装后需要重新获取。")
         #expect(viewController.tableView.dataSource?.tableView?(
             viewController.tableView,
-            titleForFooterInSection: 4
+            titleForFooterInSection: 5
         ) == "仅原有 APNs 方式使用 ns-apns；企业微信与 Bark 直接连接，不需要此服务或 Device Token。")
 
         let stepsCell = try #require(viewController.tableView.dataSource?.tableView(
@@ -50,27 +50,27 @@ struct PushNotificationSettingsViewControllerTests {
         ))
         let statusCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 0, section: 2)
+            cellForRowAt: IndexPath(row: 0, section: 3)
         ))
         let enableCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 1, section: 2)
+            cellForRowAt: IndexPath(row: 1, section: 3)
         ))
         let tokenCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 0, section: 3)
+            cellForRowAt: IndexPath(row: 0, section: 4)
         ))
         let fetchCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 1, section: 3)
+            cellForRowAt: IndexPath(row: 1, section: 4)
         ))
         let copyCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 2, section: 3)
+            cellForRowAt: IndexPath(row: 2, section: 4)
         ))
         let githubCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 0, section: 4)
+            cellForRowAt: IndexPath(row: 0, section: 5)
         ))
 
         #expect(stepsCell.textLabel?.text == PushNotificationSettingsCopy.setupSteps)
@@ -95,14 +95,14 @@ struct PushNotificationSettingsViewControllerTests {
         viewController.loadViewIfNeeded()
         viewController.applyAuthorizationStatusForTesting(.denied)
 
-        #expect(viewController.tableView.numberOfRows(inSection: 2) == 2)
+        #expect(viewController.tableView.numberOfRows(inSection: 3) == 2)
         let statusCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 0, section: 2)
+            cellForRowAt: IndexPath(row: 0, section: 3)
         ))
         let settingsCell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 1, section: 2)
+            cellForRowAt: IndexPath(row: 1, section: 3)
         ))
         #expect(statusCell.detailTextLabel?.text == "已关闭")
         #expect(settingsCell.textLabel?.text == "前往系统设置")

@@ -51,7 +51,7 @@ final class NotificationViewController: UIViewController {
     ) {
         self.isLoggedIn = isLoggedIn ?? { await TabLayoutAccountGate.isLoggedIn() }
         self.selectedTab = initialTab
-        self.client = client ?? NodeSeekNotificationClient()
+        self.client = client ?? SharedNotificationClient.shared
         self.currentAccountStore = currentAccountStore
         super.init(nibName: nil, bundle: nil)
         title = "通知"
@@ -69,6 +69,7 @@ final class NotificationViewController: UIViewController {
             name: AppTextSizeSettings.didChangeNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(self, selector: #selector(messagesReceived), name: AppMessageCenter.didReceive, object: nil)
         setupUI()
         loadCurrentUserID()
         loadUnreadCount()
@@ -323,7 +324,7 @@ final class NotificationViewController: UIViewController {
         if let navigationController {
             navigationController.pushViewController(loginViewController, animated: true)
         } else {
-            present(UINavigationController(rootViewController: loginViewController), animated: true)
+            present(MessageNavigationController(rootViewController: loginViewController), animated: true)
         }
     }
 
@@ -392,6 +393,18 @@ final class NotificationViewController: UIViewController {
         case .message:
             return messageRecords.count
         }
+    }
+
+    func selectTab(_ tab: NodeSeekNotificationTab) {
+        loadViewIfNeeded()
+        segmentedControl.selectedSegmentIndex = tab.rawValue
+        tabChanged()
+    }
+
+    @objc private func messagesReceived() {
+        guard isViewLoaded, view.window != nil else { return }
+        loadUnreadCount()
+        loadSelectedTab(showLoading: false)
     }
 
     @objc private func tabChanged() {

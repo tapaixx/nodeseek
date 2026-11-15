@@ -479,7 +479,7 @@ final class ProbeInstanceEditorViewController: UITableViewController {
                 self.testConnection()
             }
         }
-        present(UINavigationController(rootViewController: login), animated: true)
+        present(MessageNavigationController(rootViewController: login), animated: true)
     }
 
     private func logoutPanel() {

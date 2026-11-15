@@ -21,6 +21,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = appRouter.makeRootViewController()
         window.makeKeyAndVisible()
         self.window = window
+        AppMessageCenter.shared.attach(window: window)
 
         // 窗口显示后异步预热 WebView，供验证页回退使用；推送冷启动不弹引导，避免挡住跳转。
         DispatchQueue.main.async { [weak self, weak window] in
@@ -69,6 +70,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        AppMessageCenter.shared.start()
         DirectPushMonitor.shared.start()
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -89,6 +91,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
+        AppMessageCenter.shared.stop()
         DirectPushMonitor.shared.stop()
         DirectPushBackground.schedule()
         VisitedPostStore.shared.flush()

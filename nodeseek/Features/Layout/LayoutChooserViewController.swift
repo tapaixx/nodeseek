@@ -299,7 +299,7 @@ extension LayoutChooserViewController {
         guard presenter.presentedViewController == nil,
               settings.needsChoicePrompt(currentVersion: version) else { return false }
         // 放进导航栈，多 Tab 模式的第 2 步需要 push
-        let navigationController = UINavigationController(
+        let navigationController = MessageNavigationController(
             rootViewController: LayoutChooserViewController(mode: .upgradePrompt, settings: settings)
         )
         navigationController.modalPresentationStyle = .fullScreen

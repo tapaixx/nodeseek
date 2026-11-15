@@ -100,7 +100,7 @@ final class DefaultNodeImageAuthorizationPresenter: NodeImageAuthorizationPresen
                 }
             }
         }
-        presentingViewController.present(UINavigationController(rootViewController: authViewController), animated: true)
+        presentingViewController.present(MessageNavigationController(rootViewController: authViewController), animated: true)
     }
 }
 

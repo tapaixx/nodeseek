@@ -16,7 +16,7 @@ final class DirectPushMonitor {
          sender: DirectPushSending = DirectPushSender.shared, accounts: CurrentAccountStore = .shared,
          defaults: UserDefaults = .standard) {
         self.store = store
-        self.client = client ?? NodeSeekNotificationClient()
+        self.client = client ?? SharedNotificationClient.shared
         self.sender = sender
         self.accounts = accounts
         self.defaults = defaults
