@@ -65,6 +65,7 @@ nonisolated struct ProbeStatus: Codable, Equatable, Sendable {
     /// 探针采样时间；离线后保持为最后一次上报的时间。
     var sampledAt: Date?
     var metrics: ProbeMetrics
+    var network: [ProbeNetworkSeries]? = nil
 }
 
 /// 历史曲线上的一个点。Komari 历史记录里的内存总量为 0，内存百分比需要结合节点总量计算。

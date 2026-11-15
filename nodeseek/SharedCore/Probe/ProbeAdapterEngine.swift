@@ -163,7 +163,8 @@ nonisolated struct ProbeAdapterEngine: Sendable {
                 let last = ProbeJSONPath.date(ProbeJSONPath.first(path, in: item), format: format)
                 online = last.map { now.timeIntervalSince($0) <= seconds } ?? false
             }
-            result[id] = ProbeStatus(nodeID: id, online: online, sampledAt: sampledAt, metrics: metrics(fields, item, now: now))
+            result[id] = ProbeStatus(nodeID: id, online: online, sampledAt: sampledAt, metrics: metrics(fields, item, now: now),
+                network: ProbeNetworkParser.latest(adapter: spec.id, item: item, sampledAt: sampledAt))
         }
         return result
     }

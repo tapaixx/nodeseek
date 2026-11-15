@@ -18,7 +18,13 @@ nonisolated struct ProbeAdapterSpec: Decodable, Equatable, Sendable {
     let nodes: Collection
     let status: StatusMapping
     let history: Collection?
+    let network: NetworkMapping?
     let errors: [ErrorRule]?
+
+    nonisolated struct NetworkMapping: Decodable, Equatable, Sendable {
+        let request: String
+        let format: String
+    }
 
     nonisolated enum Auth: Decodable, Equatable, Sendable {
         case none

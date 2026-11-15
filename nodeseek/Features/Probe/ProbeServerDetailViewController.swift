@@ -13,6 +13,13 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
     private let viewModel: ProbeMonitorViewModel
     private var range = Range.hour
     private var historyTask: Task<Void, Never>?
+    private var networkTask: Task<Void, Never>?
+    private var networkRequestID = UUID()
+    private var networkSeries: [ProbeNetworkSeries] = []
+    private var networkHours = 1
+    private var networkMessage: String?
+    private var networkLoadedAt = Date.distantPast
+    private let networkPanel = ProbeNetworkPanelView(frame: .zero)
 
     private let scrollView = UIScrollView()
     private let titleLabel = ProbeStyle.label(.systemFont(ofSize: 28, weight: .heavy), lines: 2)
@@ -58,6 +65,7 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
         NotificationCenter.default.addObserver(self, selector: #selector(viewModelDidUpdate), name: ProbeMonitorViewModel.didUpdateNotification, object: viewModel)
         render()
         loadHistory()
+        loadNetwork()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -89,6 +97,7 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
             guard let self, let range = Range(rawValue: rangeControl.selectedSegmentIndex) else { return }
             self.range = range
             loadHistory()
+            loadNetwork()
         }, for: .valueChanged)
         rangeControl.setContentHuggingPriority(.required, for: .horizontal)
         cpuCaptionLabel.text = "CPU"
@@ -118,7 +127,7 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
         factsStack.distribution = .fillEqually
         planStack.axis = .vertical
         planStack.spacing = 12
-        let column = UIStackView(arrangedSubviews: [header, chartCard, topTiles, bottomTiles, Self.card(factsStack), planCard, footerLabel])
+        let column = UIStackView(arrangedSubviews: [header, chartCard, networkPanel, topTiles, bottomTiles, Self.card(factsStack), planCard, footerLabel])
         column.axis = .vertical
         column.spacing = 10
         column.setCustomSpacing(18, after: header)
@@ -159,6 +168,7 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
 
     @objc private func viewModelDidUpdate() {
         render()
+        if networkTask == nil, Date().timeIntervalSince(networkLoadedAt) > 60 { loadNetwork() }
     }
 
     private func render() {
@@ -169,6 +179,8 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
             return
         }
         let content = ProbeRowContent(entry: entry, trend: nil)
+        if networkSeries.isEmpty, let summary = entry.server.status?.network { networkSeries = summary }
+        networkPanel.configure(networkSeries, message: networkMessage, hours: networkHours)
         let node = entry.server.node
         let metrics = content.metrics
         let dimmed = content.isDimmed
@@ -370,6 +382,32 @@ final class ProbeServerDetailViewController: UIViewController, UIGestureRecogniz
                 chart.accessibilityLabel = "最近 \(range.title) CPU 最高 \(ProbeFormat.percent(peak))%"
                 chart.isAccessibilityElement = true
             }
+        }
+    }
+
+    private func loadNetwork() {
+        guard let entry else { return }
+        networkTask?.cancel()
+        let requestID = UUID()
+        networkRequestID = requestID
+        let hours = range.hours
+        networkMessage = "正在加载最近 \(hours) 小时的线路采样…"
+        networkPanel.configure(networkSeries, message: networkMessage, hours: networkHours)
+        networkLoadedAt = Date()
+        networkTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await viewModel.networkHistory(for: entry, hours: hours)
+                guard !Task.isCancelled, requestID == networkRequestID else { return }
+                networkSeries = result
+                networkHours = hours
+                networkMessage = nil
+            } catch {
+                guard !Task.isCancelled, requestID == networkRequestID else { return }
+                networkMessage = "线路读取失败：\(ProbeFetchError.from(error).message)\(networkSeries.isEmpty ? "" : "，显示上次数据")"
+            }
+            networkTask = nil
+            networkPanel.configure(networkSeries, message: networkMessage, hours: networkHours)
         }
     }
 

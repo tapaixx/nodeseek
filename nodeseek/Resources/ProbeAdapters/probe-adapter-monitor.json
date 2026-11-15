@@ -10,7 +10,8 @@
       "method": "GET",
       "path": "/api/nodes/{nodeID}/metrics",
       "query": { "hours": "{hours}", "series": "metrics" }
-    }
+    },
+    "network": {"method": "GET", "path": "/api/nodes/{nodeID}/metrics", "query": {"hours": "{hours}", "series": "ping", "points": "240"}}
   },
   "nodes": {
     "request": "nodes",
@@ -55,6 +56,7 @@
       "netIn": "$.net_rx", "netOut": "$.net_tx"
     }
   },
+  "network": {"request": "network", "format": "monitor"},
   "errors": [
     { "status": 401, "bodyContains": "需要登录后查看", "error": "unauthorized" }
   ]

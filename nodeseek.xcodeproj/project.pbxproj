@@ -74,6 +74,7 @@
 				SharedCore/Probe/ProbeGeo.swift,
 				SharedCore/Probe/ProbeJSONPath.swift,
 				SharedCore/Probe/ProbePlan.swift,
+				SharedCore/Probe/ProbeNetwork.swift,
 				SharedCore/Probe/ProbeServerList.swift,
 				SharedCore/Probe/ProbeWidgetDigest.swift,
 			);

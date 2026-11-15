@@ -15,7 +15,8 @@
     "history": {
       "method": "GET", "path": "/api/records/load",
       "query": { "uuid": "{nodeID}", "hours": "{hours}" }
-    }
+    },
+    "network": {"method": "GET", "path": "/api/records/ping", "query": {"uuid": "{nodeID}", "hours": "{hours}"}}
   },
   "version": { "request": "version", "path": "$.data.version" },
   "preflight": [
@@ -64,6 +65,7 @@
       "netIn": "$.net_in", "netOut": "$.net_out"
     }
   },
+  "network": {"request": "network", "format": "komari"},
   "errors": [
     { "status": 401, "bodyContains": "Private site", "error": "privateSite" },
     { "path": "$.error.code", "equals": -32602, "error": "nodeNotFound" },

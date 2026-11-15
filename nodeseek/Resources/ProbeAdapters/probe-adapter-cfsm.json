@@ -68,6 +68,7 @@
       "netIn": "$.net_in_speed", "netOut": "$.net_out_speed"
     }
   },
+  "network": {"request": "history", "format": "cfsm"},
   "errors": [
     { "status": 403, "bodyContains": "Turnstile", "error": "humanVerification" },
     { "status": 401, "error": "privateSite" },

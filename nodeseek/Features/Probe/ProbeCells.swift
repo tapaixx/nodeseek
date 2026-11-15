@@ -183,6 +183,7 @@ final class ProbeServerCardCell: ProbeCardContainerCell {
     private let memoryRow = ProbeMeterRow(title: "内存", metric: .memory)
     private let diskRow = ProbeMeterRow(title: "硬盘", metric: .disk)
     private let networkLabel = UILabel()
+    private let qualityLabel = UILabel()
     /// 到期 · 价格 · 流量 · 标签；面板没填时隐藏。
     private let planLabel = UILabel()
 
@@ -204,7 +205,7 @@ final class ProbeServerCardCell: ProbeCardContainerCell {
         let cpuRow = UIStackView(arrangedSubviews: [cpuColumn, sparkline])
         cpuRow.spacing = 14
         cpuRow.alignment = .bottom
-        let column = UIStackView(arrangedSubviews: [header, cpuRow, memoryRow, diskRow, networkLabel, planLabel])
+        let column = UIStackView(arrangedSubviews: [header, cpuRow, memoryRow, diskRow, networkLabel, qualityLabel, planLabel])
         column.axis = .vertical
         column.spacing = 8
         column.setCustomSpacing(10, after: header)
@@ -249,6 +250,13 @@ final class ProbeServerCardCell: ProbeCardContainerCell {
         memoryRow.configure(percent: metrics?.memPercent, used: metrics?.memUsed, total: metrics?.memTotal, dimmed: dimmed)
         diskRow.configure(percent: metrics?.diskPercent, used: metrics?.diskUsed, total: metrics?.diskTotal, dimmed: dimmed)
         networkLabel.attributedText = Self.network(metrics, dimmed: dimmed)
+        let lines = (content.entry.server.status?.network ?? []).prefix(3)
+        qualityLabel.font = .systemFont(ofSize: 11)
+        qualityLabel.textColor = dimmed ? .tertiaryLabel : .secondaryLabel
+        qualityLabel.numberOfLines = 0
+        qualityLabel.text = lines.map { "\($0.name) \($0.latencyText) / \($0.lossText)" }.joined(separator: "  ·  ")
+        qualityLabel.isHidden = lines.isEmpty
+        qualityLabel.accessibilityIdentifier = "probe-network-summary"
         planLabel.attributedText = content.planLine
         planLabel.isHidden = planLabel.attributedText == nil
         accessibilityLabel = content.accessibilityText

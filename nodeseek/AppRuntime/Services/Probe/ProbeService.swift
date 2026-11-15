@@ -44,12 +44,16 @@ nonisolated protocol ProbeFetching: Sendable {
     func testConnection(baseURL: URL, adapterID: String) async throws -> ProbeConnectionInfo
     func snapshot(for instance: ProbeInstance, reloadNodes: Bool) async throws -> ProbeSnapshot
     func history(for instance: ProbeInstance, nodeID: String, hours: Int) async throws -> [ProbeHistoryPoint]
+    func networkHistory(for instance: ProbeInstance, nodeID: String, hours: Int) async throws -> [ProbeNetworkSeries]
     /// 探针被修改或删除后清掉内存缓存。
     func forget(instanceID: UUID) async
     func testConnection(baseURL: URL, adapterID: String, instanceID: UUID) async throws -> ProbeConnectionInfo
 }
 
 extension ProbeFetching {
+    func networkHistory(for instance: ProbeInstance, nodeID: String, hours: Int) async throws -> [ProbeNetworkSeries] {
+        throw ProbeFetchError.unsupported
+    }
     func testConnection(baseURL: URL, adapterID: String, instanceID: UUID) async throws -> ProbeConnectionInfo {
         try await testConnection(baseURL: baseURL, adapterID: adapterID)
     }
@@ -73,6 +77,8 @@ actor ProbeService: ProbeFetching {
     private var historyCache: [String: (points: [ProbeHistoryPoint], at: Date)] = [:]
     private var historyTasks: [String: Task<[ProbeHistoryPoint], Error>] = [:]
     private var generations: [UUID: Int] = [:]
+    private var networkCache: [String: (series: [ProbeNetworkSeries], at: Date)] = [:]
+    private var networkTasks: [String: Task<[ProbeNetworkSeries], Error>] = [:]
 
     init(registry: ProbeAdapterRegistry = .shared, session: URLSession? = nil,
          sessions: ProbeSessionStoring = KeychainProbeSessionStore.shared) {
@@ -155,12 +161,52 @@ actor ProbeService: ProbeFetching {
         return points
     }
 
+    func networkHistory(for instance: ProbeInstance, nodeID: String, hours: Int) async throws -> [ProbeNetworkSeries] {
+        let generation = generations[instance.id, default: 0]
+        if instance.requiresAuthentication == true, sessions.session(instanceID: instance.id, baseURL: instance.baseURL) == nil {
+            throw ProbeFetchError.unauthorized
+        }
+        let key = "\(instance.id)/\(generation)/\(instance.adapterID)/\(instance.baseURL.absoluteString)/\(nodeID)/\(hours)"
+        if let cached = networkCache[key], Date().timeIntervalSince(cached.at) < 60 { return cached.series }
+        if let task = networkTasks[key] {
+            let value = try await task.value
+            guard generation == generations[instance.id, default: 0] else { throw CancellationError() }
+            if instance.requiresAuthentication == true, sessions.session(instanceID: instance.id, baseURL: instance.baseURL) == nil {
+                throw ProbeFetchError.unauthorized
+            }
+            return value
+        }
+        let engine = try engine(instance.adapterID)
+        guard let mapping = engine.spec.network else { throw ProbeFetchError.unsupported }
+        let task = Task {
+            let object = try await self.load(mapping.request, engine: engine, baseURL: instance.baseURL,
+                                             nodeID: nodeID, hours: hours, instanceID: instance.id)
+            var names: [String: String] = [:]
+            if mapping.format == "cfsm", let config = try? await self.load("version", engine: engine, baseURL: instance.baseURL) {
+                names = ProbeNetworkParser.cfsmNames(config)
+            }
+            return try ProbeNetworkParser.history(adapter: mapping.format, object: object, names: names)
+        }
+        networkTasks[key] = task
+        defer { networkTasks[key] = nil }
+        let series = try await task.value
+        guard generation == generations[instance.id, default: 0] else { throw CancellationError() }
+        if instance.requiresAuthentication == true, sessions.session(instanceID: instance.id, baseURL: instance.baseURL) == nil {
+            throw ProbeFetchError.unauthorized
+        }
+        networkCache[key] = (series, Date())
+        return series
+    }
+
     func forget(instanceID: UUID) {
         generations[instanceID, default: 0] += 1
         nodeCache[instanceID] = nil
         historyCache = historyCache.filter { !$0.key.hasPrefix(instanceID.uuidString) }
         for (key, task) in historyTasks where key.hasPrefix(instanceID.uuidString) { task.cancel() }
         historyTasks = historyTasks.filter { !$0.key.hasPrefix(instanceID.uuidString) }
+        networkCache = networkCache.filter { !$0.key.hasPrefix(instanceID.uuidString) }
+        for (key, task) in networkTasks where key.hasPrefix(instanceID.uuidString) { task.cancel() }
+        networkTasks = networkTasks.filter { !$0.key.hasPrefix(instanceID.uuidString) }
     }
 
     private func engine(_ id: String) throws -> ProbeAdapterEngine {

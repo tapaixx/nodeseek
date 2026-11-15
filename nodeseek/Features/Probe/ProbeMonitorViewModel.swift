@@ -412,6 +412,11 @@ final class ProbeMonitorViewModel {
         return try await service.history(for: instance, nodeID: entry.server.node.id, hours: hours)
     }
 
+    func networkHistory(for entry: ProbeListEntry, hours: Int) async throws -> [ProbeNetworkSeries] {
+        guard let instance = store.instance(id: entry.instanceID) else { return [] }
+        return try await service.networkHistory(for: instance, nodeID: entry.server.node.id, hours: hours)
+    }
+
     // MARK: - 编辑
 
     func setAlias(_ alias: String?, for entry: ProbeListEntry) {
