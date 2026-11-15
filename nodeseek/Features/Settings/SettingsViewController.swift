@@ -33,9 +33,13 @@ struct SettingsBuildInfo: Equatable {
     }
 
     init(bundle: Bundle = .main) {
-        let info = bundle.infoDictionary ?? [:]
+        self.init(info: bundle.infoDictionary ?? [:])
+    }
+
+    init(info: [String: Any]) {
         self.init(
-            appVersion: Self.stringValue(info["CFBundleShortVersionString"]) ?? "未知",
+            appVersion: Self.stringValue(info["Build Release Version"])
+                ?? Self.stringValue(info["CFBundleShortVersionString"]) ?? "未知",
             buildNumber: Self.stringValue(info["CFBundleVersion"]) ?? "未知",
             gitSHA: Self.stringValue(info["Build Git SHA"]),
             workflowName: Self.stringValue(info["Build Workflow"]),

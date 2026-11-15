@@ -21,6 +21,7 @@ DerivedData/
 .derivedData/
 build/
 .build/
+__pycache__/
 *.xcresult
 *.dSYM
 *.dSYM.zip

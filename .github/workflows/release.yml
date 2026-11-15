@@ -1,0 +1,127 @@
+name: Fork Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository != 'tyrad/nodeseek' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Validate release scripts
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Choose upstream version and fork sequence
+        id: version
+        run: python3 scripts/fork_release.py prepare >> "$GITHUB_OUTPUT"
+
+      - name: Check for an already published build
+        id: existing
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # 僅完整公開的版本跳過建置；未完成的草稿可以重試。
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-draft"; then
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+            echo "published=$(test "$(cat "$RUNNER_TEMP/release-draft")" = false && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select Xcode
+        if: steps.existing.outputs.published != 'true'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Test shared logic
+        if: steps.existing.outputs.published != 'true'
+        run: make spm-test
+
+      - name: Inject fork version and build metadata
+        if: steps.existing.outputs.published != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/fork_release.py metadata --version "$RELEASE_VERSION"
+
+      - name: Archive unsigned iOS app
+        if: steps.existing.outputs.published != 'true'
+        env:
+          BASE_VERSION: ${{ steps.version.outputs.base_version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          xcodebuild -quiet archive \
+            -project nodeseek.xcodeproj -scheme nodeseek -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/nodeseek.xcarchive \
+            -derivedDataPath .build/ReleaseDerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            "MARKETING_VERSION=$BASE_VERSION" "CURRENT_PROJECT_VERSION=$BUILD_NUMBER"
+
+      - name: Package IPA and checksums
+        if: steps.existing.outputs.published != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/fork_release.py package --archive build/nodeseek.xcarchive --version "$RELEASE_VERSION"
+
+      - name: Publish GitHub Release
+        if: steps.existing.outputs.published != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          NS Connect ${RELEASE_VERSION}
+
+          - 原版本加 fork 序号，原生私信可直接查看和回复。
+          - 此 IPA 未签名，需使用自己的 Apple 账号通过侧载工具签名安装，不能直接点击安装。
+          - 源码提交：${GITHUB_SHA}
+          - 构建记录：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - SHA256SUMS 可用于校验下载文件，build-provenance.json 记录版本与来源。
+
+          ## 更新内容
+
+          EOF
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f "tag_name=$RELEASE_TAG" -f "target_commitish=$GITHUB_SHA" --jq '.body' >> "$notes"
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-draft"; then
+            test "$(cat "$RUNNER_TEMP/release-draft")" = true
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+          else
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "$RELEASE_VERSION" --notes-file "$notes" --draft
+          fi
+          # 草稿先上傳所有檔案，完整後才公開；已發佈的版本不覆寫。
+          gh release upload "$RELEASE_TAG" build/release/* --clobber
+          gh release edit "$RELEASE_TAG" --notes-file "$notes" --draft=false --latest
+          echo "Published ${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve packaged artifacts
+        if: always() && steps.existing.outputs.published != 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: NS-Connect-${{ steps.version.outputs.version }}-unsigned
+          path: build/release/*
+          if-no-files-found: ignore
