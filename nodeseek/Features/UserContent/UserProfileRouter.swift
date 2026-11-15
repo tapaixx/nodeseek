@@ -19,6 +19,9 @@ enum UserProfileRouter {
 
     @MainActor
     static func makeViewController(profileURL: URL, title: String = "用户主页") -> UIViewController {
+        if let route = NodeSeekMessageRoute(url: profileURL) {
+            return MessageConversationViewController(participantID: route.participantID)
+        }
         if let uid = nativeUID(for: profileURL) {
             return UserProfileViewController(uid: uid)
         }

@@ -40,7 +40,8 @@ struct PushNotificationRouteTests {
 
     @Test func mapsCheckinAndMessage() {
         #expect(PushNotificationRoute(userInfo: ["type": "checkin"]) == .checkin)
-        #expect(PushNotificationRoute(userInfo: ["type": "message"]) == .inbox)
+        #expect(PushNotificationRoute(userInfo: ["type": "message"]) == .messageList)
+        #expect(PushNotificationRoute(userInfo: ["type": "dm"]) == .messageList)
         #expect(PushNotificationRoute(userInfo: ["type": "at", "post_id": "1"]) != nil)
     }
 
@@ -64,7 +65,6 @@ struct PushNotificationRouteTests {
         for address in [
             "https://www.nodeseek.com/space/1#/atMe",
             "https://www.nodeseek.com/notification#/replyExtra",
-            "https://www.nodeseek.com/notification#/message?mode=list",
         ] {
             let url = try #require(URL(string: address))
             #expect(PushNotificationRoute(userInfo: ["type": "system", "url": address])
@@ -73,6 +73,13 @@ struct PushNotificationRouteTests {
         #expect(PushNotificationRoute(userInfo: [
             "type": "system", "url": "https://example.com/notification#/reply",
         ]) == .inbox)
+    }
+
+    @Test func messageListOpensNativeTab() {
+        #expect(PushNotificationRoute(userInfo: [
+            "type": "system",
+            "url": "https://www.nodeseek.com/notification#/message?mode=list",
+        ]) == .messageList)
     }
 
     @Test func mapsSystemReminderToHiddenHeaderWebPage() throws {

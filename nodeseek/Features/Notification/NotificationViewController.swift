@@ -589,7 +589,18 @@ final class NotificationViewController: UIViewController {
         if record.isViewed == false {
             markRead(id: record.maxID, tab: .message, rollbackOnFailure: false, showFailure: false)
         }
-        openWebURL(record.conversationWebURL(currentUserID: currentUserID))
+        Task { [weak self] in
+            guard let self else { return }
+            guard let uid = await currentAccountStore.snapshot()?.account.nodeSeekUID else {
+                showErrorMessage("请先登录后使用私信")
+                return
+            }
+            navigationController?.pushViewController(MessageConversationViewController(
+                participantID: record.participantID(currentUserID: uid),
+                participantName: record.participantName(currentUserID: uid),
+                currentAccountStore: currentAccountStore
+            ), animated: true)
+        }
     }
 
     private func openWebURL(_ url: URL) {

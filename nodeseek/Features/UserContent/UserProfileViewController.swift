@@ -514,8 +514,9 @@ final class UserProfileViewController: UIViewController {
     }
 
     private func openMessage() {
-        let url = NodeSeekNotificationURLBuilder.webURL(fragment: "/message?mode=talk&to=\(uid)")
-        navigationController?.pushViewController(NodeSeekWebViewController(url: url), animated: true)
+        navigationController?.pushViewController(MessageConversationViewController(
+            participantID: uid, participantName: profile?.name ?? "私信", currentAccountStore: currentAccountStore
+        ), animated: true)
     }
 
     private func openWeb(path: String, query: [URLQueryItem]) {

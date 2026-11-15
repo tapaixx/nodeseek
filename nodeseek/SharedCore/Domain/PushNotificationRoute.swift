@@ -8,6 +8,7 @@ enum PushNotificationRoute: Equatable, Sendable {
     case inbox
     case atMeList
     case replyList
+    case messageList
     case webPage(url: URL, title: String)
     /// 小组件点按：进探针列表，或直接进某台服务器的详情。
     case probe(ProbeWidgetLink)
@@ -36,6 +37,12 @@ enum PushNotificationRoute: Equatable, Sendable {
                 self = .replyList
                 return
             default:
+                if let fragment = url.fragment, let parts = URLComponents(string: fragment),
+                   parts.path == "/message",
+                   parts.queryItems?.first(where: { $0.name == "mode" })?.value == "list" {
+                    self = .messageList
+                    return
+                }
                 break
             }
         }
@@ -65,7 +72,7 @@ enum PushNotificationRoute: Equatable, Sendable {
             if let url, NodeSeekSite.isNodeSeekHost(url) {
                 self = .webPage(url: url, title: Self.webTitle(for: url))
             } else {
-                self = .inbox
+                self = ["message", "dm"].contains(type) ? .messageList : .inbox
             }
         default:
             self = .bannerOnly

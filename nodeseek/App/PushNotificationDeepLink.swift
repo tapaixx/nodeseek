@@ -61,6 +61,8 @@ extension AppRouter: PushNotificationNavigating {
             push(NotificationViewController(initialTab: .atMe))
         case .replyList:
             push(NotificationViewController(initialTab: .reply))
+        case .messageList:
+            push(NotificationViewController(initialTab: .message))
         case let .probe(link):
             openProbe(link)
         case .bannerOnly:
