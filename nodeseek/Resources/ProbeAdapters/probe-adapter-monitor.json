@@ -2,7 +2,7 @@
   "id": "monitor",
   "name": "极简探针",
   "specVersion": 1,
-  "summary": "读取极简探针的公开状态页，不需要账号。公开页关闭后无法连接。",
+  "summary": "公开状态页无需账号；非公开面板可登录账户，登录状态仅保存在本机。",
   "auth": { "type": "none" },
   "requests": {
     "nodes": { "method": "GET", "path": "/api/nodes" },

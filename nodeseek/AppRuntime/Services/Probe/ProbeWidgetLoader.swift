@@ -38,6 +38,7 @@ enum ProbeWidgetLoader {
 
         let cached = Dictionary(uniqueKeysWithValues: instances.map { ($0.id, store.snapshot(for: $0.id)) })
         let needsFetch = instances.filter { instance in
+            guard instance.requiresAuthentication != true else { return false }
             guard let snapshot = cached[instance.id] ?? nil else { return true }
             return now.timeIntervalSince(snapshot.fetchedAt) > reuseInterval
         }

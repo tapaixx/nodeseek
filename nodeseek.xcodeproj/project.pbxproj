@@ -62,6 +62,7 @@
 				AppRuntime/Services/Probe/ProbeService.swift,
 				AppRuntime/Services/Probe/ProbeWidgetLoader.swift,
 				AppRuntime/Storage/ProbeInstanceStore.swift,
+				AppRuntime/Storage/ProbeSessionStore.swift,
 				AppRuntime/Storage/ProbeSharedStorage.swift,
 				Resources/ProbeAdapters/probe-adapter-cfsm.json,
 				Resources/ProbeAdapters/probe-adapter-komari.json,

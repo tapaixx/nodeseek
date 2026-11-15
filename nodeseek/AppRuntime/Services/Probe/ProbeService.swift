@@ -40,12 +40,19 @@ struct ProbeConnectionInfo: Sendable {
     let nodes: [ProbeNode]
 }
 
-protocol ProbeFetching: Sendable {
+nonisolated protocol ProbeFetching: Sendable {
     func testConnection(baseURL: URL, adapterID: String) async throws -> ProbeConnectionInfo
     func snapshot(for instance: ProbeInstance, reloadNodes: Bool) async throws -> ProbeSnapshot
     func history(for instance: ProbeInstance, nodeID: String, hours: Int) async throws -> [ProbeHistoryPoint]
     /// 探针被修改或删除后清掉内存缓存。
     func forget(instanceID: UUID) async
+    func testConnection(baseURL: URL, adapterID: String, instanceID: UUID) async throws -> ProbeConnectionInfo
+}
+
+extension ProbeFetching {
+    func testConnection(baseURL: URL, adapterID: String, instanceID: UUID) async throws -> ProbeConnectionInfo {
+        try await testConnection(baseURL: baseURL, adapterID: adapterID)
+    }
 }
 
 /// 探针网络请求。使用独立的临时会话：不带 Cookie、不落盘缓存，与 NodeSeek 登录态完全隔离。
@@ -61,12 +68,16 @@ actor ProbeService: ProbeFetching {
 
     private let registry: ProbeAdapterRegistry
     private let session: URLSession
+    private let sessions: ProbeSessionStoring
     private var nodeCache: [UUID: (nodes: [ProbeNode], at: Date)] = [:]
     private var historyCache: [String: (points: [ProbeHistoryPoint], at: Date)] = [:]
     private var historyTasks: [String: Task<[ProbeHistoryPoint], Error>] = [:]
+    private var generations: [UUID: Int] = [:]
 
-    init(registry: ProbeAdapterRegistry = .shared, session: URLSession? = nil) {
+    init(registry: ProbeAdapterRegistry = .shared, session: URLSession? = nil,
+         sessions: ProbeSessionStoring = KeychainProbeSessionStore.shared) {
         self.registry = registry
+        self.sessions = sessions
         if let session {
             self.session = session
         } else {
@@ -82,6 +93,10 @@ actor ProbeService: ProbeFetching {
     }
 
     func testConnection(baseURL: URL, adapterID: String) async throws -> ProbeConnectionInfo {
+        try await testConnection(baseURL: baseURL, adapterID: adapterID, instanceID: UUID())
+    }
+
+    func testConnection(baseURL: URL, adapterID: String, instanceID: UUID) async throws -> ProbeConnectionInfo {
         let engine = try engine(adapterID)
         var version: String?
         if engine.spec.requests["version"] != nil, let versionSource = engine.spec.version {
@@ -91,27 +106,37 @@ actor ProbeService: ProbeFetching {
         for check in Set((engine.spec.preflight ?? []).map(\.request)) {
             try engine.runChecks(for: check, object: await load(check, engine: engine, baseURL: baseURL))
         }
-        let nodes = try engine.nodes(from: await load(engine.spec.nodes.request, engine: engine, baseURL: baseURL))
+        let nodes = try engine.nodes(from: await load(engine.spec.nodes.request, engine: engine, baseURL: baseURL, instanceID: instanceID))
         // 再请求一次状态，确认最新状态接口也可用（例如面板版本过旧没有 rpc2）。
-        _ = try engine.statuses(from: await load(engine.spec.status.request, engine: engine, baseURL: baseURL))
+        _ = try engine.statuses(from: await load(engine.spec.status.request, engine: engine, baseURL: baseURL, instanceID: instanceID))
         return ProbeConnectionInfo(version: version, nodes: nodes)
     }
 
     func snapshot(for instance: ProbeInstance, reloadNodes: Bool) async throws -> ProbeSnapshot {
+        let generation = generations[instance.id, default: 0]
+        if instance.requiresAuthentication == true, sessions.session(instanceID: instance.id, baseURL: instance.baseURL) == nil {
+            throw ProbeFetchError.unauthorized
+        }
         let engine = try engine(instance.adapterID)
         let nodes: [ProbeNode]
         if !reloadNodes, let cached = nodeCache[instance.id], Date().timeIntervalSince(cached.at) < Self.nodesTTL {
             nodes = cached.nodes
         } else {
-            nodes = try engine.nodes(from: await load(engine.spec.nodes.request, engine: engine, baseURL: instance.baseURL))
+            nodes = try engine.nodes(from: await load(engine.spec.nodes.request, engine: engine, baseURL: instance.baseURL, instanceID: instance.id))
+            guard generation == generations[instance.id, default: 0] else { throw CancellationError() }
             nodeCache[instance.id] = (nodes, Date())
         }
-        let statusObject = try await load(engine.spec.status.request, engine: engine, baseURL: instance.baseURL)
+        let statusObject = try await load(engine.spec.status.request, engine: engine, baseURL: instance.baseURL, instanceID: instance.id)
+        guard generation == generations[instance.id, default: 0] else { throw CancellationError() }
         return ProbeSnapshot(nodes: nodes, statuses: try engine.statuses(from: statusObject), fetchedAt: Date())
     }
 
     func history(for instance: ProbeInstance, nodeID: String, hours: Int) async throws -> [ProbeHistoryPoint] {
-        let key = "\(instance.id.uuidString)/\(nodeID)/\(hours)"
+        let generation = generations[instance.id, default: 0]
+        if instance.requiresAuthentication == true, sessions.session(instanceID: instance.id, baseURL: instance.baseURL) == nil {
+            throw ProbeFetchError.unauthorized
+        }
+        let key = "\(instance.id.uuidString)/\(generation)/\(nodeID)/\(hours)"
         if let cached = historyCache[key], Date().timeIntervalSince(cached.at) < Self.historyTTL {
             return cached.points
         }
@@ -120,18 +145,22 @@ actor ProbeService: ProbeFetching {
         let engine = try engine(instance.adapterID)
         guard let request = engine.spec.history?.request else { return [] }
         let task = Task { [baseURL = instance.baseURL] in
-            try engine.history(from: await self.load(request, engine: engine, baseURL: baseURL, nodeID: nodeID, hours: hours))
+            try engine.history(from: await self.load(request, engine: engine, baseURL: baseURL, nodeID: nodeID, hours: hours, instanceID: instance.id))
         }
         historyTasks[key] = task
         defer { historyTasks[key] = nil }
         let points = try await task.value
+        guard generation == generations[instance.id, default: 0] else { throw CancellationError() }
         historyCache[key] = (points, Date())
         return points
     }
 
     func forget(instanceID: UUID) {
+        generations[instanceID, default: 0] += 1
         nodeCache[instanceID] = nil
         historyCache = historyCache.filter { !$0.key.hasPrefix(instanceID.uuidString) }
+        for (key, task) in historyTasks where key.hasPrefix(instanceID.uuidString) { task.cancel() }
+        historyTasks = historyTasks.filter { !$0.key.hasPrefix(instanceID.uuidString) }
     }
 
     private func engine(_ id: String) throws -> ProbeAdapterEngine {
@@ -139,12 +168,15 @@ actor ProbeService: ProbeFetching {
         return engine
     }
 
-    private func load(_ name: String, engine: ProbeAdapterEngine, baseURL: URL, nodeID: String? = nil, hours: Int? = nil) async throws -> Any {
-        let request: URLRequest
+    private func load(_ name: String, engine: ProbeAdapterEngine, baseURL: URL, nodeID: String? = nil, hours: Int? = nil, instanceID: UUID? = nil) async throws -> Any {
+        var request: URLRequest
         do {
             request = try engine.request(name, baseURL: baseURL, nodeID: nodeID, hours: hours)
         } catch {
             throw ProbeFetchError.unsupported
+        }
+        if engine.spec.id == "monitor", let instanceID {
+            request.setValue(sessions.session(instanceID: instanceID, baseURL: baseURL)?.header(), forHTTPHeaderField: "Cookie")
         }
         let data: Data
         let response: URLResponse
@@ -165,7 +197,7 @@ actor ProbeService: ProbeFetching {
 }
 
 /// 只允许同一域名、同一端口、https 的重定向，防止以后带令牌的请求被重定向到别的站点。
-private final class SameHostRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+final class SameHostRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,

@@ -7,7 +7,7 @@ final class ProbeInstanceEditorViewController: UITableViewController {
     }
 
     private enum PanelRow: Int, CaseIterable {
-        case type, url, name
+        case type, url, name, account, logout
     }
 
     private enum ConnectionState: Equatable {
@@ -22,6 +22,9 @@ final class ProbeInstanceEditorViewController: UITableViewController {
     private let service: ProbeFetching
     private let registry: ProbeAdapterRegistry
     private let existing: ProbeInstance?
+    private let instanceID: UUID
+    private let sessions: ProbeSessionStoring
+    private var temporaryOrigins: Set<URL> = []
     private var adapterID: String
     private var urlText: String
     private var nameText: String
@@ -34,8 +37,11 @@ final class ProbeInstanceEditorViewController: UITableViewController {
     private var debounceTask: Task<Void, Never>?
 
     init(instance: ProbeInstance?, store: ProbeInstanceStore = .shared,
-         service: ProbeFetching = ProbeService.shared, registry: ProbeAdapterRegistry = .shared) {
+         service: ProbeFetching = ProbeService.shared, registry: ProbeAdapterRegistry = .shared,
+         sessions: ProbeSessionStoring = KeychainProbeSessionStore.shared) {
         self.existing = instance
+        self.instanceID = instance?.id ?? UUID()
+        self.sessions = sessions
         self.store = store
         self.service = service
         self.registry = registry
@@ -55,6 +61,8 @@ final class ProbeInstanceEditorViewController: UITableViewController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    deinit { testTask?.cancel(); debounceTask?.cancel() }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         tableView.register(ProbeTextFieldCell.self, forCellReuseIdentifier: ProbeTextFieldCell.reuseIdentifier)
@@ -63,7 +71,7 @@ final class ProbeInstanceEditorViewController: UITableViewController {
         tableView.isEditing = true
         tableView.allowsSelectionDuringEditing = true
         navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .cancel, primaryAction: UIAction { [weak self] _ in
-            self?.dismiss(animated: true)
+            self?.cancelEditor()
         })
         let save = UIBarButtonItem(title: "保存", primaryAction: UIAction { [weak self] _ in self?.save() })
         save.style = .done
@@ -113,9 +121,10 @@ final class ProbeInstanceEditorViewController: UITableViewController {
         reloadConnection()
         let adapterID = adapterID
         let service = service
+        let instanceID = instanceID
         testTask = Task { [weak self] in
             do {
-                let info = try await service.testConnection(baseURL: url, adapterID: adapterID)
+                let info = try await service.testConnection(baseURL: url, adapterID: adapterID, instanceID: instanceID)
                 guard !Task.isCancelled, let self else { return }
                 verifiedURL = url
                 connection = .success(version: info.version, count: info.nodes.count)
@@ -163,7 +172,15 @@ final class ProbeInstanceEditorViewController: UITableViewController {
         guard let url = verifiedURL, url == normalizedURL else { return }
         let name = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let panelOrder = nodes.map(\.id)
-        var instance = existing ?? ProbeInstance(name: name, baseURL: url, adapterID: adapterID)
+        var instance = existing ?? ProbeInstance(id: instanceID, name: name, baseURL: url, adapterID: adapterID)
+        do {
+            if let existing, existing.requiresAuthentication == true, existing.baseURL != url || adapterID != "monitor" {
+                try sessions.remove(instanceID: instanceID, baseURL: existing.baseURL)
+            }
+            for origin in temporaryOrigins where origin != url || adapterID != "monitor" {
+                try sessions.remove(instanceID: instanceID, baseURL: origin)
+            }
+        } catch { showCredentialError(error); return }
         instance.name = name.isEmpty ? (url.host ?? "探针") : name
         if instance.baseURL != url {
             // 换了面板地址，旧的别名和顺序不再对应。
@@ -175,6 +192,7 @@ final class ProbeInstanceEditorViewController: UITableViewController {
             instance.aliases = [:]
         }
         instance.adapterID = adapterID
+        instance.requiresAuthentication = adapterID == "monitor" && sessions.session(instanceID: instanceID, baseURL: url) != nil
         instance.hiddenNodeIDs = hiddenNodeIDs.intersection(panelOrder)
         instance.nodeOrder = panelOrder
         store.upsert(instance)
@@ -226,6 +244,10 @@ final class ProbeInstanceEditorViewController: UITableViewController {
         let alert = UIAlertController(title: "删除“\(existing.name)”？", message: "只删除本机的配置和缓存，不影响面板。", preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: "删除探针", style: .destructive) { [weak self] _ in
             guard let self else { return }
+            if existing.requiresAuthentication == true {
+                do { try sessions.remove(instanceID: instanceID, baseURL: existing.baseURL) }
+                catch { showCredentialError(error); return }
+            }
             store.remove(id: existing.id)
             Task { [service] in await service.forget(instanceID: existing.id) }
             dismiss(animated: true)
@@ -243,7 +265,7 @@ final class ProbeInstanceEditorViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch Section(rawValue: section) {
-        case .panel: return PanelRow.allCases.count
+        case .panel: return adapterID == "monitor" ? PanelRow.allCases.count : 3
         case .connection: return 1
         case .servers: return nodes.count
         case .delete: return 1
@@ -314,6 +336,16 @@ final class ProbeInstanceEditorViewController: UITableViewController {
                 cell.textField.accessibilityIdentifier = "probe-editor-name"
             }
             return cell
+        case .account, .logout:
+            let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+            let hasSession = normalizedURL.flatMap { sessions.session(instanceID: instanceID, baseURL: $0) } != nil
+            cell.textLabel?.text = row == .account ? (hasSession ? "重新登录账户" : "登录账户") : "退出面板账户"
+            cell.detailTextLabel?.text = row == .account ? (hasSession ? "登录状态已保存在本机" : "支持 GitHub 登录或面板应急密码") : "清除本机登录状态与缓存"
+            cell.detailTextLabel?.textColor = .secondaryLabel
+            cell.textLabel?.textColor = row == .logout ? (hasSession ? .systemRed : .tertiaryLabel) : .label
+            cell.accessoryType = row == .account ? .disclosureIndicator : .none
+            cell.accessibilityIdentifier = row == .account ? "probe-editor-account" : "probe-editor-logout"
+            return cell
         }
     }
 
@@ -378,6 +410,10 @@ final class ProbeInstanceEditorViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
         switch Section(rawValue: indexPath.section) {
         case .panel:
+            if indexPath.row == PanelRow.account.rawValue { return normalizedURL != nil }
+            if indexPath.row == PanelRow.logout.rawValue {
+                return normalizedURL.flatMap { sessions.session(instanceID: instanceID, baseURL: $0) } != nil
+            }
             return indexPath.row == PanelRow.type.rawValue && registry.engines.count > 1
         case .connection:
             if case .testing = connection { return false }
@@ -391,6 +427,8 @@ final class ProbeInstanceEditorViewController: UITableViewController {
         switch Section(rawValue: indexPath.section) {
         case .panel:
             if indexPath.row == PanelRow.type.rawValue { presentTypePicker() }
+            if indexPath.row == PanelRow.account.rawValue { openPanelLogin() }
+            if indexPath.row == PanelRow.logout.rawValue { logoutPanel() }
         case .connection: testConnection()
         case .servers:
             let id = nodes[indexPath.row].id
@@ -423,6 +461,56 @@ final class ProbeInstanceEditorViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, moveRowAt source: IndexPath, to destination: IndexPath) {
         let node = nodes.remove(at: source.row)
         nodes.insert(node, at: destination.row)
+    }
+
+    private func openPanelLogin() {
+        guard adapterID == "monitor", let url = normalizedURL else { return }
+        let login = ProbePanelLoginViewController(baseURL: url, instanceID: instanceID, sessions: sessions) { [weak self] in
+            guard let self else { return }
+            if existing?.baseURL != url { temporaryOrigins.insert(url) }
+            if var saved = store.instance(id: instanceID), saved.baseURL == url, saved.adapterID == "monitor" {
+                saved.requiresAuthentication = true
+                store.upsert(saved)
+            }
+            store.clearSnapshot(for: instanceID)
+            tableView.reloadSections(IndexSet(integer: Section.panel.rawValue), with: .none)
+            Task {
+                await self.service.forget(instanceID: self.instanceID)
+                self.testConnection()
+            }
+        }
+        present(UINavigationController(rootViewController: login), animated: true)
+    }
+
+    private func logoutPanel() {
+        guard let url = normalizedURL else { return }
+        do { try sessions.remove(instanceID: instanceID, baseURL: url) }
+        catch { showCredentialError(error); return }
+        // 私有資料不能在退出後繼續留在快照或節點列表。
+        store.clearSnapshot(for: instanceID)
+        nodes = []
+        hiddenNodeIDs = []
+        verifiedURL = nil
+        if var saved = store.instance(id: instanceID) {
+            saved.requiresAuthentication = true
+            store.upsert(saved)
+        }
+        tableView.reloadData()
+        Task { await service.forget(instanceID: instanceID); testConnection() }
+    }
+
+    private func cancelEditor() {
+        do { for origin in temporaryOrigins { try sessions.remove(instanceID: instanceID, baseURL: origin) } }
+        catch { showCredentialError(error); return }
+        testTask?.cancel()
+        debounceTask?.cancel()
+        dismiss(animated: true)
+    }
+
+    private func showCredentialError(_ error: Error) {
+        let alert = UIAlertController(title: "登录状态更新失败", message: error.localizedDescription, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        present(alert, animated: true)
     }
 }
 

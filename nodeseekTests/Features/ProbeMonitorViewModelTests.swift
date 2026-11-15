@@ -194,7 +194,7 @@ final class ProbeMonitorViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.cards[1].updated, "连接失败")
         XCTAssertTrue(viewModel.cards[1].hasError)
         viewModel.selectInstance(room.id)
-        XCTAssertEqual(viewModel.selectedErrorMessage, "面板拒绝访问，可能未对游客公开。")
+        XCTAssertEqual(viewModel.selectedErrorMessage, "面板需要登录或登录已过期。极简探针可在编辑页登录账户后重试。")
         XCTAssertTrue(viewModel.visibleEntries.isEmpty)
     }
 

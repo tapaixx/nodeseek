@@ -86,6 +86,8 @@ nonisolated struct ProbeInstance: Codable, Equatable, Sendable, Identifiable {
     var nodeOrder: [String]
     /// 本机显示用的别名，不修改面板上的名称。
     var aliases: [String: String]
+    /// 會話另存 Keychain；小組件沒有登入權限時只使用 App 更新的快照。
+    var requiresAuthentication: Bool? = nil
 
     init(id: UUID = UUID(), name: String, baseURL: URL, adapterID: String,
          hiddenNodeIDs: Set<String> = [], nodeOrder: [String] = [], aliases: [String: String] = [:]) {

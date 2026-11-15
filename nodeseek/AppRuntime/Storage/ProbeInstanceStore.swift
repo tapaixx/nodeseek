@@ -60,6 +60,11 @@ final class ProbeInstanceStore {
         defaults.set(data, forKey: Key.snapshotPrefix + id.uuidString)
     }
 
+    func clearSnapshot(for id: UUID) {
+        defaults.removeObject(forKey: Key.snapshotPrefix + id.uuidString)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
+    }
+
     /// nil 表示按数量自动选择。
     var prefersCompactList: Bool? {
         get { defaults.object(forKey: Key.density) as? Bool }

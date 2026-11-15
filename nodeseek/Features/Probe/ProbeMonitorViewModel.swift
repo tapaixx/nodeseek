@@ -4,7 +4,7 @@ extension ProbeFetchError {
     var message: String {
         switch self {
         case .privateSite: return "面板未对游客公开，无法读取。请在面板后台开启公开访问（Komari 为关闭“私有站点”）。"
-        case .unauthorized: return "面板拒绝访问，可能未对游客公开。"
+        case .unauthorized: return "面板需要登录或登录已过期。极简探针可在编辑页登录账户后重试。"
         case .humanVerification: return "面板开启了人机验证，App 无法读取。请在面板后台关闭人机验证。"
         case .nodeNotFound: return "节点不存在或对游客隐藏。"
         case .unsupported: return "面板版本过旧或类型不匹配，暂不支持。"
@@ -229,7 +229,11 @@ final class ProbeMonitorViewModel {
 
     /// 删掉本机的探针配置和缓存。存储变更会通知列表页切到剩下的第一张。
     func deleteInstance(id: UUID) async {
-        guard store.instance(id: id) != nil else { return }
+        guard let instance = store.instance(id: id) else { return }
+        if instance.adapterID == "monitor", instance.requiresAuthentication == true {
+            do { try KeychainProbeSessionStore.shared.remove(instanceID: id, baseURL: instance.baseURL) }
+            catch { return }
+        }
         store.remove(id: id)
         await service.forget(instanceID: id)
     }
@@ -251,6 +255,10 @@ final class ProbeMonitorViewModel {
         states = states.filter { ids.contains($0.key) }
         for instance in instances where states[instance.id] == nil {
             states[instance.id] = InstanceState(snapshot: store.snapshot(for: instance.id))
+        }
+        for instance in instances where instance.requiresAuthentication == true && store.snapshot(for: instance.id) == nil {
+            states[instance.id]?.snapshot = nil
+            trends = trends.filter { !$0.key.hasPrefix(instance.id.uuidString) }
         }
         // 刚添加的探针切到前台；删掉当前卡片时回到剩下的第一张。
         let added = instances.last { !known.contains($0.id) }
