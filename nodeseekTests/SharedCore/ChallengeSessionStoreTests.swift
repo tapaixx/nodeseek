@@ -22,7 +22,7 @@ struct ChallengeSessionStoreTests {
         let message = await store.recordChallenge(.cloudflare(url))
         let state = await store.currentState()
 
-        #expect(message == "站点当前需要 Cloudflare 验证，请稍后重试。")
+        #expect(message == "站点需要 Cloudflare 验证，请在「设置 → 手动站点验证」完成验证后重试。")
         switch state {
         case .challengeRequired(.cloudflare(let challengeURL), _):
             #expect(challengeURL == url)

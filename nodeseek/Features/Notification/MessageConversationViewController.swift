@@ -9,6 +9,7 @@ final class MessageConversationViewController: UIViewController, UITableViewData
     private let sendButton = UIButton(type: .system)
     private let statusLabel = UILabel()
     private let retryButton = UIButton(type: .system)
+    private let verificationButton = UIButton(type: .system)
     private let confirmRetryButton = UIButton(type: .system)
     private let refreshControl = UIRefreshControl()
     private let participantHeader = MessageParticipantHeaderView()
@@ -36,10 +37,11 @@ final class MessageConversationViewController: UIViewController, UITableViewData
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    deinit { refreshTask?.cancel() }
+    deinit { refreshTask?.cancel(); NotificationCenter.default.removeObserver(self) }
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        NotificationCenter.default.addObserver(self, selector: #selector(verificationChanged), name: SiteVerificationCoordinator.didChange, object: SiteVerificationCoordinator.shared)
         configureUI()
         model.onChange = { [weak self] in self?.render() }
         render()
@@ -54,7 +56,7 @@ final class MessageConversationViewController: UIViewController, UITableViewData
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 10_000_000_000) } catch { return }
                 guard let self, !Task.isCancelled else { return }
-                if UIApplication.shared.applicationState == .active { await model.load() }
+                if UIApplication.shared.applicationState == .active, !SiteVerificationCoordinator.shared.automaticRequestsPaused { await model.load() }
             }
         }
     }
@@ -96,11 +98,22 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         statusLabel.adjustsFontForContentSizeCategory = true
         statusLabel.textColor = .secondaryLabel
         statusLabel.accessibilityIdentifier = "message-conversation-status"
+        verificationButton.setTitle("手动验证", for: .normal)
+        verificationButton.accessibilityIdentifier = "message-manual-verification"
+        let touchHeight = verificationButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        touchHeight.priority = .defaultHigh
+        touchHeight.isActive = true
+        verificationButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            SiteVerificationCoordinator.shared.present(from: self) { [weak self] in
+                Task { await self?.model.load() }
+            }
+        }, for: .touchUpInside)
         retryButton.setTitle("刷新对话", for: .normal)
         retryButton.addTarget(self, action: #selector(refresh), for: .touchUpInside)
         confirmRetryButton.setTitle("已核对，允许重新发送", for: .normal)
         confirmRetryButton.addTarget(self, action: #selector(confirmRetry), for: .touchUpInside)
-        let status = UIStackView(arrangedSubviews: [statusLabel, retryButton, confirmRetryButton])
+        let status = UIStackView(arrangedSubviews: [statusLabel, retryButton, verificationButton, confirmRetryButton])
         status.axis = .vertical
         status.alignment = .leading
         status.spacing = 4
@@ -199,7 +212,10 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         ), animated: true)
     }
 
+    @objc private func verificationChanged() { if isViewLoaded { render() } }
+
     private func render() {
+        verificationButton.isHidden = model.errorMessage == nil || SiteVerificationCoordinator.shared.requiredURL == nil
         title = model.participantName
         participantHeader.configure(uid: model.participantID, name: model.participantName,
                                     profile: model.participantProfile, post: model.latestDiscussion)

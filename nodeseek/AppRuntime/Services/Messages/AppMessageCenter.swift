@@ -8,6 +8,7 @@ final class AppMessageCenter {
     static let didChange = Notification.Name("AppMessageCenter.didChange")
     static let didReceive = Notification.Name("AppMessageCenter.didReceive")
     private(set) var unreadCount = NodeSeekNotificationUnreadCount.zero
+    private let verification: SiteVerificationCoordinator
     private let client: NodeSeekNotificationClientProtocol
     private let accounts: CurrentAccountStore
     private let defaults: UserDefaults
@@ -27,11 +28,13 @@ final class AppMessageCenter {
     var onLocalEvent: ((InAppMessageEvent) async -> Void)?
     var makeInbox: (NodeSeekNotificationTab) -> NotificationViewController = { NotificationViewController(initialTab: $0) }
 
-    init(client: NodeSeekNotificationClientProtocol? = nil, accounts: CurrentAccountStore = .shared,
+    init(client: NodeSeekNotificationClientProtocol? = nil, verification: SiteVerificationCoordinator? = nil, accounts: CurrentAccountStore = .shared,
          defaults: UserDefaults = .standard, now: @escaping () -> Date = Date.init,
          isForeground: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active }) {
+        self.verification = verification ?? .shared
         self.client = client ?? SharedNotificationClient.shared
         self.accounts = accounts; self.defaults = defaults; self.now = now; self.isForeground = isForeground
+        NotificationCenter.default.addObserver(self, selector: #selector(readStateChanged), name: SiteVerificationCoordinator.didVerify, object: self.verification)
         NotificationCenter.default.addObserver(self, selector: #selector(readStateChanged), name: .nodeSeekNotificationReadStateDidChange, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(sessionClosed), name: .nodeSeekLoginSessionDidClose, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(countsChanged(_:)), name: .nodeSeekNotificationUnreadCountDidUpdate, object: nil)
@@ -107,6 +110,7 @@ final class AppMessageCenter {
     }
 
     func refresh() async {
+        guard !verification.automaticRequestsPaused else { return }
         guard !checking else { refreshPending = true; return }
         checking = true
         defer {
@@ -125,9 +129,11 @@ final class AppMessageCenter {
         let counts: NodeSeekNotificationUnreadCount
         do { counts = try await client.loadUnreadCount() } catch { return }
         guard await valid(uid, epoch: version), !Task.isCancelled else { return }
+        guard !verification.automaticRequestsPaused else { return }
         applyCounts(counts)
         var incoming: [InAppMessageEvent] = []
         for tab in NodeSeekNotificationTab.allCases {
+            guard !verification.automaticRequestsPaused else { return }
             do {
                 let events = counts.count(for: tab) > 0 ? try await events(tab: tab, uid: uid) : []
                 guard await valid(uid, epoch: version), !Task.isCancelled else { return }

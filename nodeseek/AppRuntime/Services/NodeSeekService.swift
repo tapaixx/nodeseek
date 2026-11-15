@@ -44,6 +44,7 @@ struct NodeSeekService: Sendable {
         switch try await parseInBackground(response: response, parse: { [parser] in try parser.parsePostList(html: $0.html) }) {
         case .challenge(let challenge):
             AppLog.warning(.service, "检测到 challenge: \(challenge.logDescription)")
+            await SiteVerificationCoordinator.shared.record(challenge)
             return .challenge(challenge)
         case .parsed(let posts, let account):
             await saveOpportunisticAccount(account)
@@ -71,6 +72,7 @@ struct NodeSeekService: Sendable {
         switch try await parseInBackground(response: response, parse: parsePage) {
         case .challenge(let challenge):
             AppLog.warning(.service, "检测到搜索 challenge: \(challenge.logDescription)")
+            await SiteVerificationCoordinator.shared.record(challenge)
             return .challenge(challenge)
         case .parsed(let searchPage, let account):
             await saveOpportunisticAccount(account)
@@ -93,10 +95,12 @@ struct NodeSeekService: Sendable {
         if let challenge = challengeDetector.detect(response: response) {
             AppLog.warning(.service, "检测到账号信息 challenge: \(challenge.logDescription)")
             AppLog.debug(.account, "service: challenge \(challenge.logDescription)")
+            await SiteVerificationCoordinator.shared.record(challenge)
             return .challenge(challenge)
         }
 
         let account = try parser.parseAccount(html: response.html)
+        await SiteVerificationCoordinator.shared.recordSuccess()
         await currentAccountStore?.save(account)
         AppLog.info(.service, "账号信息解析完成，loggedIn=\(account.isLoggedIn), displayName=\(account.displayName)")
         AppLog.debug(.account, "service: parsed loggedIn=\(account.isLoggedIn) name=\(account.displayName) avatar=\(account.avatarURL?.path ?? "nil") profile=\(account.profileURL?.path ?? "nil") stats=\(account.stats.joined(separator: "|"))")
@@ -112,6 +116,7 @@ struct NodeSeekService: Sendable {
         switch try await parseInBackground(response: response, parse: { [parser] in try parser.parsePostDetail(html: $0.html, url: targetURL) }) {
         case .challenge(let challenge):
             AppLog.warning(.service, "检测到详情 challenge: \(challenge.logDescription)")
+            await SiteVerificationCoordinator.shared.record(challenge)
             return .challenge(challenge)
         case .parsed(let detail, let account):
             await saveOpportunisticAccount(account)
@@ -155,6 +160,7 @@ struct NodeSeekService: Sendable {
     }
 
     private func saveOpportunisticAccount(_ account: AccountResponse?) async {
+        await SiteVerificationCoordinator.shared.recordSuccess()
         guard let currentAccountStore, let account else { return }
         await currentAccountStore.save(account)
         AppLog.debug(.account, "service: opportunistic account save -> loggedIn=\(account.isLoggedIn) name=\(account.displayName)")
@@ -173,7 +179,8 @@ struct NodeSeekService: Sendable {
         let parsesAccount = currentAccountStore != nil
         let outcome = try await Task.detached(priority: .userInitiated) { () throws -> BackgroundParseOutcome<Value> in
             if let challenge = challengeDetector.detect(response: response) {
-                return .challenge(challenge)
+                await SiteVerificationCoordinator.shared.record(challenge)
+            return .challenge(challenge)
             }
             let account = parsesAccount ? Self.opportunisticAccount(in: response.html, parser: parser) : nil
             return .parsed(try parse(response), account: account)

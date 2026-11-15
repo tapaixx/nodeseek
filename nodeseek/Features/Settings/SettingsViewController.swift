@@ -130,6 +130,7 @@ class SettingsViewController: UITableViewController {
         case nodeImage
         case specialFollow
         case autoCheckIn
+        case siteVerification
     }
 
     private enum NotificationRow: Int, CaseIterable {
@@ -380,6 +381,16 @@ class SettingsViewController: UITableViewController {
             return specialFollowCell(for: indexPath)
         case .autoCheckIn:
             return autoCheckInCell(for: indexPath)
+        case .siteVerification:
+            let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+            cell.textLabel?.text = "手动站点验证"
+            cell.detailTextLabel?.text = "完成 Cloudflare 验证并同步当前登录会话"
+            cell.detailTextLabel?.textColor = .secondaryLabel
+            cell.detailTextLabel?.numberOfLines = 0
+            cell.imageView?.image = UIImage(systemName: "checkmark.shield")
+            cell.accessoryType = .disclosureIndicator
+            cell.accessibilityIdentifier = "settings-site-verification-cell"
+            return cell
         case .none:
             return UITableViewCell()
         }
@@ -676,6 +687,8 @@ class SettingsViewController: UITableViewController {
             showSpecialFollowKeywords()
         case .autoCheckIn:
             showAutoCheckInSettings()
+        case .siteVerification:
+            SiteVerificationCoordinator.shared.present(from: self)
         case .none:
             break
         }

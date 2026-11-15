@@ -9,6 +9,7 @@ protocol NodeSeekMessageClientProtocol {
 
 @MainActor
 final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
+    private let verification: SiteVerificationCoordinator
     private let session: URLSession
     private let cookiePreparer: () async -> Void
     private let pageAction: (URL, String, [String: Any]) async throws -> [String: Any]
@@ -16,6 +17,7 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
 
     init(
         session: URLSession = .shared,
+        verification: SiteVerificationCoordinator? = nil,
         cookiePreparer: @escaping () async -> Void = { await NodeSeekCookieSession().prepareHTTPLoad() },
         notifications: NodeSeekNotificationClientProtocol? = nil,
         pageAction: @escaping (URL, String, [String: Any]) async throws -> [String: Any] = { url, source, arguments in
@@ -27,6 +29,7 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
             }
         }
     ) {
+        self.verification = verification ?? .shared
         self.session = session
         self.cookiePreparer = cookiePreparer
         self.notifications = notifications ?? NodeSeekNotificationClient()
@@ -42,6 +45,10 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
         WebRequestFingerprint.applyJSONHeaders(to: &request, referer: Self.webURL(participantID: participantID))
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw NodeSeekMessageError.invalidResponse }
+        if let challenge = NodeSeekVerificationRequired.detect(data: data, response: http, pageURL: Self.webURL(participantID: participantID)) {
+            verification.require(challenge.url)
+            throw challenge
+        }
         if http.statusCode == 401 { throw NodeSeekMessageError.loginRequired }
         guard (200..<300).contains(http.statusCode) else {
             throw NodeSeekNotificationClientError.httpStatus(http.statusCode)
@@ -51,6 +58,7 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
         }
         guard thread.success else { throw NodeSeekMessageError.rejected(thread.message ?? "无法读取私信") }
         guard thread.talkTo?.memberID == participantID else { throw NodeSeekMessageError.invalidParticipant }
+        verification.recordSuccess()
         return thread
     }
 

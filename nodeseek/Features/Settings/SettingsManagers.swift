@@ -67,6 +67,7 @@ final class DefaultSettingsSessionManager: SettingsSessionManaging {
     }
 
     func logout() async {
+        SiteVerificationCoordinator.shared.reset()
         await cookieSession.clearLoginSession()
         await currentAccountStore.clear()
         nodeImageAPIKeyStore.clear()

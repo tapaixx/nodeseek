@@ -40,7 +40,7 @@ actor NodeSeekSessionStore {
         case .loginRequired:
             return "本帖需要注册用户才能查看😭"
         case .cloudflare:
-            return "站点当前需要 Cloudflare 验证，请稍后重试。"
+            return "站点需要 Cloudflare 验证，请在「设置 → 手动站点验证」完成验证后重试。"
         case .blocked:
             return "站点当前返回了拦截页面，请稍后重试。"
         case .unsupported:

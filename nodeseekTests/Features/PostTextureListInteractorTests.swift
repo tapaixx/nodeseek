@@ -38,7 +38,7 @@ struct PostTextureListInteractorTests {
 
         #expect(requestedURLs.count == 1)
         #expect(presenter.loadedPosts == nil)
-        #expect(presenter.errorMessage == "站点当前需要 Cloudflare 验证，请稍后重试。")
+        #expect(presenter.errorMessage == "站点需要 Cloudflare 验证，请在「设置 → 手动站点验证」完成验证后重试。")
         guard case .challengeRequired(.cloudflare, _) = state else {
             Issue.record("列表命中 challenge 后应写入统一 session 状态")
             return

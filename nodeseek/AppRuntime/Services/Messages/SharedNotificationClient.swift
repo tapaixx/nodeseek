@@ -14,7 +14,7 @@ final class SharedNotificationClient: NodeSeekNotificationClientProtocol {
     init(base: NodeSeekNotificationClientProtocol? = nil, accounts: CurrentAccountStore = .shared) {
         self.base = base ?? NodeSeekNotificationClient()
         self.accounts = accounts
-        for name in [Notification.Name.nodeSeekLoginSessionDidClose, .nodeSeekNotificationReadStateDidChange] {
+        for name in [Notification.Name.nodeSeekLoginSessionDidClose, .nodeSeekNotificationReadStateDidChange, SiteVerificationCoordinator.didVerify] {
             NotificationCenter.default.addObserver(self, selector: #selector(invalidate), name: name, object: nil)
         }
     }

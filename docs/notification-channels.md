@@ -10,6 +10,14 @@
 
 App 内提醒与外部渠道共享短时读取缓存，分别维护按账号隔离的去重记录，不会自动标记通知已读。退出账号会移除本功能创建的本地通知。
 
+## 遇到 Cloudflare 验证
+
+打开「设置 → 手动站点验证」，也可点击通知、私信及共用加载失败页的「手动验证」。在内置网页完成验证后点击「验证后重试」，App 会先同步当前会话，再恢复消息读取；原有输入与登录 Cookie 保留。刷新按钮位于顶部提示区，右上角仍可打开消息。
+
+识别到站点验证或打开验证页时，自动消息检查及外部渠道读取会暂停。验证完成，或新的主动读取已经成功后恢复。验证页不会自动重发私信、回帖等写入操作。Cloudflare 的通行有效期由站点配置决定，详见 [Challenge Passage](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/challenge-passage/)；响应识别依据 [官方验证响应说明](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)。
+
+本地验证使用模拟挑战响应与虚构 Cookie，真实挑战需要在设备上手动完成。
+
 ## 配置
 
 1. App → 设置 → 推送通知，选择「企业微信机器人」或「Bark」。

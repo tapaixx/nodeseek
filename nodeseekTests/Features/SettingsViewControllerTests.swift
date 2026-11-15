@@ -45,7 +45,7 @@ struct SettingsViewControllerTests {
             #expect(viewController.title == "设置")
             #expect(tableView.numberOfSections == 7)
             #expect(tableView.numberOfRows(inSection: 0) == 7)
-            #expect(tableView.numberOfRows(inSection: 1) == 3)
+            #expect(tableView.numberOfRows(inSection: 1) == 4)
             #expect(tableView.numberOfRows(inSection: 2) == 1)
             #expect(tableView.numberOfRows(inSection: 3) == 1)
             #expect(tableView.numberOfRows(inSection: 4) == 1)

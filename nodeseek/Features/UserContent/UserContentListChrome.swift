@@ -16,9 +16,12 @@ enum UserContentDisplayMode {
 final class UserContentErrorView: UIStackView {
     let messageLabel = UILabel()
     private let retryButton = UIButton(type: .system)
+    private let verificationButton = UIButton(type: .system)
+    private let verification: SiteVerificationCoordinator
     var onRetry: (() -> Void)?
 
-    init(accessibilityIdentifier: String) {
+    init(accessibilityIdentifier: String, verification: SiteVerificationCoordinator? = nil) {
+        self.verification = verification ?? .shared
         super.init(frame: .zero)
         axis = .vertical
         alignment = .center
@@ -49,10 +52,32 @@ final class UserContentErrorView: UIStackView {
         addArrangedSubview(titleLabel)
         addArrangedSubview(messageLabel)
         addArrangedSubview(retryButton)
+        verificationButton.setTitle("手动验证", for: .normal)
+        verificationButton.accessibilityIdentifier = "error-manual-verification"
+        verificationButton.addTarget(self, action: #selector(verifyTapped), for: .touchUpInside)
+        let touchHeight = verificationButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        touchHeight.priority = .defaultHigh
+        touchHeight.isActive = true
+        addArrangedSubview(verificationButton)
+        NotificationCenter.default.addObserver(self, selector: #selector(updateVerification), name: SiteVerificationCoordinator.didChange, object: self.verification)
+        updateVerification()
     }
 
     required init(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func updateVerification() { verificationButton.isHidden = verification.requiredURL == nil }
+    @objc private func verifyTapped() {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController {
+                verification.present(from: controller) { [weak self] in self?.onRetry?() }
+                return
+            }
+            responder = current.next
+        }
     }
 
     @objc private func retryTapped() {

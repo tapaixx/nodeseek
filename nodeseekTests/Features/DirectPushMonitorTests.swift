@@ -61,7 +61,7 @@ final class DirectPushMonitorTests: XCTestCase {
         let store = MemoryDirectPushStore()
         store.values[.bark] = DirectPushConfiguration(channel: .bark, address: "https://api.day.app/fake-key", enabled: true, accountID: 10)
         let client = DirectPushClientStub(), sender = RecordingDirectPushSender()
-        let monitor = DirectPushMonitor(store: store, client: client, sender: sender, accounts: accounts, defaults: defaults)
+        let monitor = DirectPushMonitor(store: store, verification: SiteVerificationCoordinator(), client: client, sender: sender, accounts: accounts, defaults: defaults)
         return (monitor, client, sender, store, accounts)
     }
 }

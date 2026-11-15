@@ -15,7 +15,15 @@ final class MessageNavigationController: UINavigationController {
         super.setNavigationBarHidden(hidden, animated: animated)
         DispatchQueue.main.async { [weak self] in self?.messageCenter.updatePresentation() }
     }
-    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); messageCenter.updatePresentation() }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        (navigationBar as? MessageNavigationBar)?.updateShortcut()
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        (navigationBar as? MessageNavigationBar)?.updateShortcut()
+        messageCenter.updatePresentation()
+    }
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         DispatchQueue.main.async { [weak self] in self?.messageCenter.updatePresentation() }
@@ -24,6 +32,9 @@ final class MessageNavigationController: UINavigationController {
 
 final class MessageNavigationBar: UINavigationBar {
     static let shortcutID = "global-message-shortcut"
+    private weak var observedItem: UINavigationItem?
+    private var observations: [NSKeyValueObservation] = []
+    private var installing = false
     weak var owner: UINavigationController?
     var messageCenter: AppMessageCenter = .shared
     override init(frame: CGRect) {
@@ -34,8 +45,26 @@ final class MessageNavigationBar: UINavigationBar {
     deinit { NotificationCenter.default.removeObserver(self) }
     @objc private func messageStateChanged() { setNeedsLayout() }
     override func layoutSubviews() {
-        // 頁面可能在非同步讀取後重新設定按鈕；每次排版校正而不攔截其 setter。
+        updateShortcut()
+        super.layoutSubviews()
+    }
+    func updateShortcut() {
+        guard !installing else { return }
+        installing = true
+        defer { installing = false }
         if let item = topItem {
+            if observedItem !== item {
+                observedItem = item
+                // UIKit 可直接更新導覽列內容而不再排版 bar；監聽頁面重設按鈕的兩種入口。
+                observations = [
+                    item.observe(\.rightBarButtonItems) { [weak self] _, _ in
+                        DispatchQueue.main.async { [weak self] in self?.updateShortcut() }
+                    },
+                    item.observe(\.rightBarButtonItem) { [weak self] _, _ in
+                        DispatchQueue.main.async { [weak self] in self?.updateShortcut() }
+                    }
+                ]
+            }
             var buttons = item.rightBarButtonItems ?? []
             let shortcut = buttons.first { $0.accessibilityIdentifier == Self.shortcutID }
             let control: MessageShortcutButton
@@ -55,7 +84,6 @@ final class MessageNavigationBar: UINavigationBar {
                 messageCenter.openMessages(in: owner)
             }
         }
-        super.layoutSubviews()
     }
 }
 

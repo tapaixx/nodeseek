@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 final class DirectPushMonitor {
     static let shared = DirectPushMonitor()
+    private let verification: SiteVerificationCoordinator
     private let store: DirectPushStoring
     private let client: NodeSeekNotificationClientProtocol
     private let sender: DirectPushSending
@@ -12,9 +13,10 @@ final class DirectPushMonitor {
     private var task: Task<Void, Never>?
     private var checking = false
 
-    init(store: DirectPushStoring = DirectPushStore.shared, client: NodeSeekNotificationClientProtocol? = nil,
+    init(store: DirectPushStoring = DirectPushStore.shared, verification: SiteVerificationCoordinator? = nil, client: NodeSeekNotificationClientProtocol? = nil,
          sender: DirectPushSending = DirectPushSender.shared, accounts: CurrentAccountStore = .shared,
          defaults: UserDefaults = .standard) {
+        self.verification = verification ?? .shared
         self.store = store
         self.client = client ?? SharedNotificationClient.shared
         self.sender = sender
@@ -37,7 +39,7 @@ final class DirectPushMonitor {
     @objc private func settingsChanged() { stop(); start() }
 
     func check() async {
-        guard !checking else { return }
+        guard !verification.automaticRequestsPaused, !checking else { return }
         checking = true
         defer { checking = false }
         guard let account = await accounts.snapshot()?.account, account.isLoggedIn,
@@ -46,7 +48,7 @@ final class DirectPushMonitor {
         guard !configurations.isEmpty else { return }
         // 某一類讀取失敗不能建立基線，也不應阻止其他類別。
         for tab in NodeSeekNotificationTab.allCases {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !verification.automaticRequestsPaused else { return }
             do {
                 let events = try await events(tab: tab, uid: uid)
                 guard await accounts.snapshot()?.account.nodeSeekUID == uid else { return }

@@ -18,6 +18,7 @@ nonisolated protocol NodeSeekNotificationClientProtocol {
 
 @MainActor
 final class NodeSeekNotificationClient: NodeSeekNotificationClientProtocol {
+    private let verification: SiteVerificationCoordinator
     private let session: URLSession
     private let baseURL: URL
     private let decoder = JSONDecoder()
@@ -26,12 +27,14 @@ final class NodeSeekNotificationClient: NodeSeekNotificationClientProtocol {
 
     init(
         session: URLSession = .shared,
+        verification: SiteVerificationCoordinator? = nil,
         baseURL: URL = NodeSeekSite.baseURL,
         cookiePreparer: @escaping @Sendable () async -> Void = {
             await NodeSeekNotificationClient.prepareDefaultHTTPLoad()
         },
         markViewedSubmitter: NodeSeekNotificationMarkViewedSubmitting? = nil
     ) {
+        self.verification = verification ?? .shared
         self.session = session
         self.baseURL = baseURL
         self.cookiePreparer = cookiePreparer
@@ -174,6 +177,12 @@ final class NodeSeekNotificationClient: NodeSeekNotificationClientProtocol {
         if let response = urlResponse as? HTTPURLResponse {
             AppLog.info(.service, "通知接口响应元信息 path=\(request.url?.path ?? "nil"), status=\(response.statusCode), contentType=\(response.mimeType ?? "nil"), bytes=\(data.count), redirected=\(response.url != request.url)")
         }
+        if let http = urlResponse as? HTTPURLResponse,
+           let challenge = NodeSeekVerificationRequired.detect(data: data, response: http,
+               pageURL: request.value(forHTTPHeaderField: "Referer").flatMap(URL.init(string:)) ?? baseURL) {
+            verification.require(challenge.url)
+            throw challenge
+        }
         if let httpResponse = urlResponse as? HTTPURLResponse,
            (200..<300).contains(httpResponse.statusCode) == false {
             AppLog.warning(.service, "通知接口错误详情 path=\(request.url?.path ?? "nil"), \(NotificationErrorLogSummary.describe(data))")
@@ -186,6 +195,7 @@ final class NodeSeekNotificationClient: NodeSeekNotificationClientProtocol {
 
         do {
             let decoded = try decoder.decode(Response.self, from: data)
+            verification.recordSuccess()
             let status = httpStatusDescription(from: urlResponse)
             AppLog.info(
                 .service,

@@ -136,7 +136,7 @@ final class AppMessageCenterTests: XCTestCase {
         let first = try shortcut(in: nav)
         XCTAssertEqual(first.accessibilityValue, "0")
         editor.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "发布", style: .done, target: nil, action: nil)
-        nav.navigationBar.setNeedsLayout(); nav.navigationBar.layoutIfNeeded()
+        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(editor.navigationItem.rightBarButtonItems?.filter { $0.accessibilityIdentifier == MessageNavigationBar.shortcutID }.count, 1)
         XCTAssertEqual(editor.navigationItem.rightBarButtonItem?.title, "发布")
         UIView.performWithoutAnimation { first.sendActions(for: .touchUpInside) }
@@ -256,7 +256,7 @@ final class AppMessageCenterTests: XCTestCase {
         let accounts = CurrentAccountStore(userDefaults: defaults)
         await saveAccount(10, to: accounts)
         let client = AppMessageClientStub()
-        let center = AppMessageCenter(client: client, accounts: accounts, defaults: defaults, isForeground: { foreground })
+        let center = AppMessageCenter(client: client, verification: SiteVerificationCoordinator(), accounts: accounts, defaults: defaults, isForeground: { foreground })
         return (center, client, accounts)
     }
 }
