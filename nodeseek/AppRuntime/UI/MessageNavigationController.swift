@@ -1,5 +1,19 @@
 import UIKit
 
+enum MessageShortcutPolicy {
+    static func hasExistingEntry(in controller: UIViewController?) -> Bool {
+        if let tabs = controller as? MainTabBarController {
+            if !tabs.tabBar.isHidden, tabs.tabItems.contains(.notification) { return true }
+            return hasExistingEntry(in: tabs.selectedViewController)
+        }
+        if let home = controller as? PostListViewController {
+            // 阅读模式通过侧边栏进入通知，多 Tab 模式取决于底栏是否保留通知。
+            return home.layout == .reading
+        }
+        return controller is NotificationViewController || controller is PostListSideMenuViewController
+    }
+}
+
 /// 所有 App 自有導覽棧共用，保留各頁原有第一個右側按鈕的語意。
 final class MessageNavigationController: UINavigationController {
     private let messageCenter: AppMessageCenter
@@ -66,6 +80,13 @@ final class MessageNavigationBar: UINavigationBar {
                 ]
             }
             var buttons = item.rightBarButtonItems ?? []
+            if MessageShortcutPolicy.hasExistingEntry(in: owner?.topViewController) {
+                if buttons.contains(where: { $0.accessibilityIdentifier == Self.shortcutID }) {
+                    buttons.removeAll { $0.accessibilityIdentifier == Self.shortcutID }
+                    item.rightBarButtonItems = buttons
+                }
+                return
+            }
             let shortcut = buttons.first { $0.accessibilityIdentifier == Self.shortcutID }
             let control: MessageShortcutButton
             if let existing = shortcut?.customView as? MessageShortcutButton { control = existing }

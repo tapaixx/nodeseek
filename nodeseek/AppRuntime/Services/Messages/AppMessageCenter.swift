@@ -49,6 +49,8 @@ final class AppMessageCenter {
     func updatePresentation() {
         floatingShortcut?.removeFromSuperview()
         guard let window, let current = visibleController(window.rootViewController), isForeground() else { return }
+        let page = current.navigationController?.topViewController ?? current
+        guard !MessageShortcutPolicy.hasExistingEntry(in: page) else { return }
         if let nav = current.navigationController as? MessageNavigationController, !nav.isNavigationBarHidden { return }
         var ancestor: UIViewController? = current
         while let controller = ancestor {

@@ -167,7 +167,7 @@ final class PushNotificationSettingsViewController: UITableViewController {
         case .steps:
             return nil
         case .inApp:
-            return "所有页面右上角均可打开消息。前台约每 20 秒检查一次，显示未读角标与可点击提醒；关闭提醒仍保留消息入口。后台通知需开启系统权限，刷新时间由 iOS 决定，强制关闭 App 后不继续检查。"
+            return "可通过侧边栏或底部通知入口查看消息，其他页面右上角提供快捷入口。前台约每 20 秒检查一次，显示未读角标与可点击提醒；关闭提醒仍保留消息入口。后台通知需开启系统权限，刷新时间由 iOS 决定，强制关闭 App 后不继续检查。"
         case .permission:
             return "不会在打开本页时弹窗，只有点「开启通知」才会向系统申请。"
         case .token:

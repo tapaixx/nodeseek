@@ -120,6 +120,53 @@ final class AppMessageCenterTests: XCTestCase {
         XCTAssertEqual(f.client.countCalls, 3)
     }
 
+    func testExistingNotificationEntriesSuppressShortcutAndRespectTabCustomization() {
+        let home = PostListRouter.createModule(layout: .reading)
+        XCTAssertTrue(MessageShortcutPolicy.hasExistingEntry(in: home))
+
+        let settings = AppNavigationLayoutSettings(userDefaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let tabs = MainTabBarController(layoutSettings: settings)
+        XCTAssertTrue(MessageShortcutPolicy.hasExistingEntry(in: tabs))
+        tabs.select(.me)
+        XCTAssertTrue(MessageShortcutPolicy.hasExistingEntry(in: tabs))
+        tabs.applyTabItems([.home, .me])
+        XCTAssertFalse(MessageShortcutPolicy.hasExistingEntry(in: tabs))
+        tabs.select(.home)
+        XCTAssertFalse(MessageShortcutPolicy.hasExistingEntry(in: tabs))
+        XCTAssertFalse(MessageShortcutPolicy.hasExistingEntry(in: UIViewController()))
+    }
+
+    func testNotificationPageRemovesShortcutAndPreservesOriginalActions() async throws {
+        let f = await fixture()
+        let editor = UIViewController()
+        let nav = MessageNavigationController(rootViewController: editor, messageCenter: f.center)
+        let window = try makeWindow(nav)
+        defer { window.isHidden = true }
+        _ = try shortcut(in: nav)
+        let inbox = NotificationViewController(client: f.client, currentAccountStore: f.accounts, isLoggedIn: { false })
+        inbox.loadViewIfNeeded()
+        let originalButtons = inbox.navigationItem.rightBarButtonItems ?? []
+        let staleShortcut = UIBarButtonItem(customView: MessageShortcutButton(frame: .zero))
+        staleShortcut.accessibilityIdentifier = MessageNavigationBar.shortcutID
+        inbox.navigationItem.rightBarButtonItems = originalButtons + [staleShortcut]
+        nav.pushViewController(inbox, animated: false)
+        (nav.navigationBar as? MessageNavigationBar)?.updateShortcut()
+        XCTAssertEqual(inbox.navigationItem.rightBarButtonItems, originalButtons)
+        nav.popViewController(animated: false)
+        _ = try shortcut(in: nav)
+    }
+
+    func testReadingHomeSuppressesFloatingShortcut() async throws {
+        let f = await fixture()
+        let nav = MessageNavigationController(rootViewController: PostListRouter.createModule(layout: .reading), messageCenter: f.center)
+        let window = try makeWindow(nav)
+        defer { window.isHidden = true }
+        f.center.attach(window: window)
+        nav.setNavigationBarHidden(true, animated: false)
+        f.center.updatePresentation()
+        XCTAssertFalse(window.subviews.contains { $0 is MessageShortcutButton })
+    }
+
     func testShortcutPreservesSaveButtonAndDraftAcrossPagesAndAsyncButtonChanges() async throws {
         let f = await fixture()
         f.center.makeInbox = { NotificationViewController(initialTab: $0, client: f.client, currentAccountStore: f.accounts, isLoggedIn: { true }) }
