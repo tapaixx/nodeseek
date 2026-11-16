@@ -219,9 +219,9 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         title = model.participantName
         participantHeader.configure(uid: model.participantID, name: model.participantName,
                                     profile: model.participantProfile, post: model.latestDiscussion)
-        statusLabel.text = model.errorMessage ?? (model.isLoading && !model.hasLoaded ? "正在加载私信…" : nil)
+        statusLabel.text = model.errorMessage ?? model.readStateWarning ?? (model.isLoading && !model.hasLoaded ? "正在加载私信…" : nil)
         statusLabel.isHidden = statusLabel.text == nil
-        retryButton.isHidden = model.errorMessage == nil
+        retryButton.isHidden = model.errorMessage == nil && model.readStateWarning == nil
         retryButton.isEnabled = !model.isLoading && !model.isSending
         confirmRetryButton.isHidden = !model.deliveryUncertain
         input.isEditable = !model.isSending

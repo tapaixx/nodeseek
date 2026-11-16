@@ -71,11 +71,21 @@ enum HiddenWebViewPostActionPageScheduler {
 }
 
 enum HiddenWebViewPageActionScheduler {
+    enum Purpose {
+        case general
+        case messageSending
+    }
+
     private static let requestLock = HiddenWebViewRequestLock()
     private static let channel = HiddenWebViewChannel.isolated(UUID())
+    private static let messageSendLock = HiddenWebViewRequestLock()
+    private static let messageSendChannel = HiddenWebViewChannel.isolated(UUID())
 
-    fileprivate static var lockAndChannel: (HiddenWebViewRequestLock, HiddenWebViewChannel) {
-        (requestLock, channel)
+    fileprivate static func lockAndChannel(for purpose: Purpose) -> (HiddenWebViewRequestLock, HiddenWebViewChannel) {
+        switch purpose {
+        case .general: return (requestLock, channel)
+        case .messageSending: return (messageSendLock, messageSendChannel)
+        }
     }
 }
 
@@ -309,10 +319,11 @@ struct HiddenWebViewPostDislikeClient {
 
 func withHiddenWebViewPageActionLoader<T>(
     logMessage: String,
+    purpose: HiddenWebViewPageActionScheduler.Purpose = .general,
     operation: @MainActor (HiddenWebViewLoader) async throws -> T
 ) async throws -> T {
     let startedAt = Date()
-    let (requestLock, channel) = HiddenWebViewPageActionScheduler.lockAndChannel
+    let (requestLock, channel) = HiddenWebViewPageActionScheduler.lockAndChannel(for: purpose)
     AppLog.info(.webView, "隐藏 WebView 页面动作请求锁等待开始")
     try await requestLock.acquire()
     AppLog.info(.webView, "隐藏 WebView 页面动作请求锁获取成功: waitMs=\(AppLog.elapsedMilliseconds(since: startedAt))")

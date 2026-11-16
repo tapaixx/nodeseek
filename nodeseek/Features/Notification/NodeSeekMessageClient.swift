@@ -21,7 +21,7 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
         cookiePreparer: @escaping () async -> Void = { await NodeSeekCookieSession().prepareHTTPLoad() },
         notifications: NodeSeekNotificationClientProtocol? = nil,
         pageAction: @escaping (URL, String, [String: Any]) async throws -> [String: Any] = { url, source, arguments in
-            try await withHiddenWebViewPageActionLoader(logMessage: "准备发送私信") { loader in
+            try await withHiddenWebViewPageActionLoader(logMessage: "准备发送私信", purpose: .messageSending) { loader in
                 try await loader.runPageAutomationScript(
                     pageURL: url, source: source, arguments: arguments,
                     timeoutInterval: 20, actionName: "发送私信"

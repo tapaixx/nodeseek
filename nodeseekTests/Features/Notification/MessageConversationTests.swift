@@ -27,6 +27,89 @@ final class MessageConversationTests: XCTestCase {
         XCTAssertFalse(model.isSending)
     }
 
+    func testPendingReadSyncKeepsSendEnabledAndDoesNotStartDuplicateSync() async throws {
+        let client = StubMessageClient()
+        client.suspendMark = true
+        let controller = MessageConversationViewController(participantID: 20, client: client, currentAccountStore: await makeStore(), profileClient: StubMessageParticipantClient())
+        controller.loadViewIfNeeded()
+        while client.pendingMark == nil { await Task.yield() }
+        defer { client.pendingMark?.resume(); client.pendingMark = nil }
+        let model = controller.model
+        XCTAssertTrue(model.hasLoaded)
+        XCTAssertFalse(model.isLoading)
+        model.draft = "已读同步等待时仍可回复"
+        model.onChange?()
+        let send = try XCTUnwrap(findView(in: controller.view, identifier: "message-conversation-send") as? UIButton)
+        XCTAssertTrue(send.isEnabled)
+        await model.send()
+        XCTAssertEqual(client.sentContents, ["已读同步等待时仍可回复"])
+        XCTAssertTrue(model.draft.isEmpty)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(client.markedIDs, [[1]])
+    }
+
+    func testReadSyncFailureDoesNotBecomeSendFailureAndRefreshRetries() async throws {
+        let client = StubMessageClient()
+        client.markError = URLError(.timedOut)
+        let model = try await makeModel(client: client)
+        await model.load()
+        XCTAssertFalse(model.isLoading)
+        XCTAssertTrue(model.hasLoaded)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNotNil(model.readStateWarning)
+        model.draft = "你好"
+        await model.send()
+        XCTAssertEqual(client.sentContents, ["你好"])
+        XCTAssertTrue(model.draft.isEmpty)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNotNil(model.readStateWarning)
+        XCTAssertFalse(model.deliveryUncertain)
+        client.markError = nil
+        await model.load()
+        XCTAssertNil(model.readStateWarning)
+        XCTAssertEqual(client.markedIDs, [[1], [1], [1]])
+        await model.load()
+        XCTAssertEqual(client.markedIDs.count, 3)
+    }
+
+    func testReadSyncWarningDoesNotReplaceActualSendError() async throws {
+        let client = StubMessageClient()
+        client.markError = URLError(.timedOut)
+        let model = try await makeModel(client: client)
+        await model.load()
+        client.sendError = NodeSeekMessageError.rejected("发送过于频繁")
+        model.draft = "保留草稿"
+        await model.send()
+        XCTAssertEqual(model.errorMessage, "发送过于频繁")
+        XCTAssertNotNil(model.readStateWarning)
+        XCTAssertEqual(model.draft, "保留草稿")
+        client.sendError = NodeSeekMessageError.deliveryUncertain
+        await model.send()
+        XCTAssertTrue(model.deliveryUncertain)
+        await model.load()
+        XCTAssertEqual(model.errorMessage, NodeSeekMessageError.deliveryUncertain.localizedDescription)
+        let sendCount = client.sentContents.count
+        await model.send()
+        XCTAssertEqual(client.sentContents.count, sendCount)
+    }
+
+    func testLogoutDuringReadSyncClearsPrivateState() async throws {
+        let client = StubMessageClient()
+        client.suspendMark = true
+        let store = await makeStore()
+        let model = MessageConversationViewModel(participantID: 20, client: client, currentAccountStore: store)
+        let loading = Task { await model.load() }
+        while client.pendingMark == nil { await Task.yield() }
+        model.draft = "私人草稿"
+        await store.clear()
+        client.pendingMark?.resume()
+        await loading.value
+        XCTAssertFalse(model.hasLoaded)
+        XCTAssertTrue(model.messages.isEmpty)
+        XCTAssertTrue(model.draft.isEmpty)
+        XCTAssertNil(model.readStateWarning)
+    }
+
     func testSuccessfulSendClearsDraftEvenWhenRefreshFails() async throws {
         let client = StubMessageClient()
         let model = try await makeModel(client: client)
@@ -117,6 +200,26 @@ final class MessageConversationTests: XCTestCase {
         }
     }
 
+    func testMessageSendingChannelDoesNotWaitForReadSyncChannel() async throws {
+        var pending: CheckedContinuation<Void, Never>?
+        let readSync = Task {
+            try await withHiddenWebViewPageActionLoader(logMessage: "测试已读同步等待") { _ in
+                await withCheckedContinuation { pending = $0 }
+            }
+        }
+        while pending == nil { await Task.yield() }
+        let sent = expectation(description: "已读同步等待时发送通道仍可执行")
+        let sending = Task {
+            try await withHiddenWebViewPageActionLoader(logMessage: "测试独立发送通道", purpose: .messageSending) { _ in
+                sent.fulfill()
+            }
+        }
+        await fulfillment(of: [sent], timeout: 2)
+        pending?.resume()
+        try await readSync.value
+        try await sending.value
+    }
+
     func testReadRequestUsesConversationAPIAndPreparesCookies() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MessageURLProtocol.self]
@@ -151,6 +254,7 @@ final class MessageConversationTests: XCTestCase {
     func testConversationLayoutInLightAndDarkMode() async throws {
         for style in [UIUserInterfaceStyle.light, .dark] {
             let client = StubMessageClient()
+            client.markError = URLError(.timedOut)
             let store = await makeStore()
             let controller = MessageConversationViewController(participantID: 20, participantName: "Alice", client: client, currentAccountStore: store, profileClient: StubMessageParticipantClient())
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -169,6 +273,12 @@ final class MessageConversationTests: XCTestCase {
             controller.model.draft = "在应用内直接回复"
             controller.model.onChange?()
             window.layoutIfNeeded()
+            let send = try XCTUnwrap(findView(in: controller.view, identifier: "message-conversation-send") as? UIButton)
+            XCTAssertTrue(send.isEnabled)
+            XCTAssertNil(controller.model.errorMessage)
+            XCTAssertNotNil(controller.model.readStateWarning)
+            let status = try XCTUnwrap(findView(in: controller.view, identifier: "message-conversation-status") as? UILabel)
+            XCTAssertEqual(status.text, controller.model.readStateWarning)
             let input = try XCTUnwrap(findView(in: controller.view, identifier: "message-conversation-input") as? UITextView)
             XCTAssertGreaterThan(input.frame.height, 40)
             XCTAssertGreaterThan(input.frame.width, window.bounds.width * 0.6)
@@ -312,6 +422,9 @@ private final class StubMessageClient: NodeSeekMessageClientProtocol {
     var loadError: Error?
     var suspendSend = false
     var pendingSend: CheckedContinuation<Void, Never>?
+    var markError: Error?
+    var suspendMark = false
+    var pendingMark: CheckedContinuation<Void, Never>?
 
     func loadConversation(participantID: Int) async throws -> NodeSeekMessageThread {
         if let loadError { throw loadError }
@@ -329,7 +442,11 @@ private final class StubMessageClient: NodeSeekMessageClientProtocol {
         if let sendError { throw sendError }
     }
 
-    func markViewed(ids: [Int]) async throws { markedIDs.append(ids) }
+    func markViewed(ids: [Int]) async throws {
+        markedIDs.append(ids)
+        if suspendMark { await withCheckedContinuation { pendingMark = $0 } }
+        if let markError { throw markError }
+    }
 }
 
 @MainActor

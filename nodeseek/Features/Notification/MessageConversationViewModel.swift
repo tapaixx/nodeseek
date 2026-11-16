@@ -10,6 +10,7 @@ final class MessageConversationViewModel {
     private(set) var isSending = false
     private(set) var hasLoaded = false
     private(set) var errorMessage: String?
+    private(set) var readStateWarning: String?
     private(set) var deliveryUncertain = false
     private(set) var participantProfile: UserProfileRecord?
     private(set) var latestDiscussion: UserDiscussionRecord?
@@ -19,6 +20,7 @@ final class MessageConversationViewModel {
     private let currentAccountStore: CurrentAccountStore
     private let profileClient: MessageParticipantLoading?
     private var markedIDs: Set<Int> = []
+    private var isSyncingReadState = false
 
     init(
         participantID: Int,
@@ -54,7 +56,8 @@ final class MessageConversationViewModel {
         guard !isLoading, !isSending else { return }
         isLoading = true
         onChange?()
-        defer { isLoading = false; onChange?() }
+        var loadedUserID: Int?
+        var unread: [Int] = []
         do {
             let uid = try await accountID()
             let thread = try await client.loadConversation(participantID: participantID)
@@ -66,20 +69,31 @@ final class MessageConversationViewModel {
             messages = thread.messages(participantID: participantID, currentUserID: uid)
             hasLoaded = true
             if !deliveryUncertain { errorMessage = nil }
-            onChange?()
-            let unread = messages.filter { $0.receiverID == uid && !$0.viewed && !markedIDs.contains($0.id) }.map(\.id)
-            if !unread.isEmpty, !Task.isCancelled {
-                do {
-                    try await client.markViewed(ids: unread)
-                    markedIDs.formUnion(unread)
-                    NotificationCenter.default.post(name: .nodeSeekNotificationReadStateDidChange, object: nil)
-                } catch {
-                    if !deliveryUncertain { errorMessage = "私信已加载，已读状态同步失败，请下拉刷新重试" }
-                }
-            }
+            loadedUserID = uid
+            unread = messages.filter { $0.receiverID == uid && !$0.viewed && !markedIDs.contains($0.id) }.map(\.id)
+            if unread.isEmpty { readStateWarning = nil }
         } catch {
-            guard !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            if !Task.isCancelled { errorMessage = error.localizedDescription }
+        }
+        // 内容读取完成即可回复，标记已读的网页请求不能继续占用加载状态。
+        isLoading = false
+        onChange?()
+        if let uid = loadedUserID { await syncReadState(ids: unread, userID: uid) }
+    }
+
+    private func syncReadState(ids: [Int], userID: Int) async {
+        guard !ids.isEmpty, !isSyncingReadState, !Task.isCancelled else { return }
+        isSyncingReadState = true
+        defer { isSyncingReadState = false; onChange?() }
+        do {
+            try await client.markViewed(ids: ids)
+            guard !Task.isCancelled, try await accountID() == userID else { return }
+            markedIDs.formUnion(ids)
+            readStateWarning = nil
+            NotificationCenter.default.post(name: .nodeSeekNotificationReadStateDidChange, object: nil)
+        } catch {
+            guard !Task.isCancelled, (try? await accountID()) == userID else { return }
+            readStateWarning = "已读状态同步失败，不影响发送消息，将在刷新时重试"
         }
     }
 
@@ -117,12 +131,14 @@ final class MessageConversationViewModel {
             messages = []
             draft = ""
             hasLoaded = false
+            readStateWarning = nil
             throw NodeSeekMessageError.loginRequired
         }
         if let currentUserID, currentUserID != uid {
             messages = []
             draft = ""
             hasLoaded = false
+            readStateWarning = nil
             throw NodeSeekMessageError.loginRequired
         }
         currentUserID = uid
