@@ -2,6 +2,12 @@
 
 向 `main` 推送后，`Fork Release` 自动构建并发布到本仓库的 GitHub Releases。也可以在 Actions 手动运行。无需配置 Apple 证书或额外密钥。
 
+## 构建机器
+
+- 仓库位于 `tapaixx/nodeseek`，Release 与 TestFlight 使用组织内的 `OMacBook` 自托管 runner，标签为 `self-hosted`、`macOS`、`ARM64`。
+- 组织 runner 组需允许此仓库访问；Mac 离线或正在运行其他任务时，构建会排队等待。
+- 使用 Mac 当前配置的 Xcode，工作流记录 Xcode 与 Swift 版本；升级构建工具时在 Mac 上维护。
+
 ## 版本号
 
 - 原版本读取工程所有 target 的 `MARKETING_VERSION`，当前是 `1.3.1`。
