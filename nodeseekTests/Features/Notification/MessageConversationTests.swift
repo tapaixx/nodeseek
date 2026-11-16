@@ -175,6 +175,15 @@ final class MessageConversationTests: XCTestCase {
             XCTAssertLessThanOrEqual(input.convert(input.bounds, to: window).maxY, window.bounds.maxY)
             let table = try XCTUnwrap(findView(in: controller.view, identifier: "message-conversation-table") as? UITableView)
             XCTAssertEqual(table.numberOfRows(inSection: 0), 2)
+            for row in 0..<table.numberOfRows(inSection: 0) {
+                let cell = try XCTUnwrap(table.cellForRow(at: IndexPath(row: row, section: 0)))
+                let timestamp = try XCTUnwrap(findView(in: cell.contentView, identifier: "message-timestamp") as? UILabel)
+                XCTAssertFalse(timestamp.isHidden)
+                XCTAssertNotNil(timestamp.text?.range(of: #"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"#, options: .regularExpression))
+                XCTAssertTrue(timestamp.text?.hasSuffix(row == 0 ? ":00" : ":10") == true)
+                let bubble = try XCTUnwrap(cell.contentView.subviews.first { $0 is UITextView })
+                XCTAssertEqual(bubble.frame.minY - timestamp.frame.maxY, 8, accuracy: 0.5)
+            }
             let profile = try XCTUnwrap(findView(in: controller.view, identifier: "message-participant-profile") as? UIControl)
             XCTAssertTrue(profile.accessibilityLabel?.contains("Lv.3") == true)
             let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
@@ -228,17 +237,36 @@ final class MessageConversationTests: XCTestCase {
         }
         let cell = MessageBubbleCell(style: .default, reuseIdentifier: nil)
         cell.frame = CGRect(x: 0, y: 0, width: 390, height: 140)
-        cell.configure(try message("你好"), isMine: false, showsTimestamp: false, availableWidth: 390, onProfile: { _ in })
+        cell.configure(try message("你好"), isMine: false, availableWidth: 390, onProfile: { _ in })
         cell.layoutIfNeeded()
         let bubble = try XCTUnwrap(cell.contentView.subviews.first { $0 is UITextView })
         let avatar = try XCTUnwrap(findView(in: cell.contentView, identifier: "message-sender-avatar"))
         XCTAssertLessThan(bubble.frame.width, 120)
         XCTAssertLessThanOrEqual(avatar.frame.maxX, bubble.frame.minX)
-        cell.configure(try message(String(repeating: "这是较长的私信内容", count: 12)), isMine: true, showsTimestamp: false, availableWidth: 390, onProfile: { _ in })
+        cell.configure(try message(String(repeating: "这是较长的私信内容", count: 12)), isMine: true, availableWidth: 390, onProfile: { _ in })
         cell.layoutIfNeeded()
         XCTAssertGreaterThan(bubble.frame.width, 200)
         XCTAssertLessThanOrEqual(bubble.frame.width, 390 * 0.72 + 1)
         XCTAssertLessThanOrEqual(bubble.frame.maxX, avatar.frame.minX)
+    }
+
+    func testEveryMessageShowsFullTimestampToSecondsAfterReuse() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 2, hour: 3, minute: 4, second: 5)))
+        let iso = ISO8601DateFormatter()
+        let cell = MessageBubbleCell(style: .default, reuseIdentifier: nil)
+        for (offset, expected) in [(0, "2025-01-02 03:04:05"), (1, "2025-01-02 03:04:06")] {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "id": offset + 1, "sender_id": 20, "receiver_id": 10, "content": "连续消息",
+                "created_at": iso.string(from: date.addingTimeInterval(Double(offset)))
+            ])
+            let message = try JSONDecoder().decode(NodeSeekDirectMessage.self, from: data)
+            cell.configure(message, isMine: offset == 1, availableWidth: 390, onProfile: { _ in })
+            let timestamp = try XCTUnwrap(findView(in: cell.contentView, identifier: "message-timestamp") as? UILabel)
+            XCTAssertFalse(timestamp.isHidden)
+            XCTAssertEqual(timestamp.text, expected)
+            cell.prepareForReuse()
+        }
     }
 
     private func findView(in view: UIView, identifier: String) -> UIView? {

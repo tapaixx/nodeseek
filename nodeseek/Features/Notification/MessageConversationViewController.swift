@@ -273,8 +273,7 @@ final class MessageConversationViewController: UIViewController, UITableViewData
             return UITableViewCell()
         }
         let message = renderedMessages[indexPath.row]
-        let showsTimestamp = indexPath.row == 0 || message.createdAt.timeIntervalSince(renderedMessages[indexPath.row - 1].createdAt) > 300
-        cell.configure(message, isMine: message.senderID == model.currentUserID, showsTimestamp: showsTimestamp, availableWidth: tableView.bounds.width) { [weak self] uid in
+        cell.configure(message, isMine: message.senderID == model.currentUserID, availableWidth: tableView.bounds.width) { [weak self] uid in
             self?.openProfile(uid: uid)
         }
         return cell
