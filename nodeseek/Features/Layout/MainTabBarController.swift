@@ -53,6 +53,17 @@ final class MainTabBarController: UITabBarController, UITabBarControllerDelegate
         tabBar.tintColor = .label
         tabBar.unselectedItemTintColor = .secondaryLabel
         observeNotificationUnreadCount()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(applyMailUnreadCount),
+            name: SeekMailUnreadMonitor.didChangeNotification, object: nil
+        )
+        SeekMailUnreadMonitor.shared.start()
+        applyMailUnreadCount()
+    }
+
+    /// 邮箱 Tab 的角标：全部邮箱的未读数，回到前台时更新。
+    @objc private func applyMailUnreadCount() {
+        rootViewControllersByItem[.mail]?.tabBarItem.badgeValue = SeekMailUnreadMonitor.badgeText(SeekMailUnreadMonitor.shared.totalUnread)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -96,6 +107,7 @@ final class MainTabBarController: UITabBarController, UITabBarControllerDelegate
         if let latestUnreadCount {
             applyNotificationUnreadCount(latestUnreadCount)
         }
+        applyMailUnreadCount()
     }
 
     // MARK: - UITabBarControllerDelegate
@@ -116,7 +128,7 @@ final class MainTabBarController: UITabBarController, UITabBarControllerDelegate
 
     /// 外层导航条显示的是本控制器的 navigationItem；各 Tab 根页面仍按原样配置自己的 navigationItem，
     /// 切 Tab 时搬过来，页面代码不用区分两种布局。
-    private func syncNavigationItemWithSelectedTab() {
+    func syncNavigationItemWithSelectedTab() {
         guard let selected = selectedViewController else { return }
         selected.loadViewIfNeeded()
         let source = selected.navigationItem
@@ -124,6 +136,8 @@ final class MainTabBarController: UITabBarController, UITabBarControllerDelegate
         navigationItem.titleView = source.titleView
         navigationItem.leftBarButtonItems = source.leftBarButtonItems
         navigationItem.rightBarButtonItems = source.rightBarButtonItems
+        navigationItem.searchController = source.searchController
+        navigationItem.hidesSearchBarWhenScrolling = source.hidesSearchBarWhenScrolling
         navigationItem.largeTitleDisplayMode = source.largeTitleDisplayMode
         navigationItem.backButtonTitle = source.backButtonTitle
         navigationItem.backBarButtonItem = source.backBarButtonItem
@@ -150,6 +164,10 @@ final class MainTabBarController: UITabBarController, UITabBarControllerDelegate
             return NotificationViewController()
         case .me:
             return MeViewController()
+        case .probe:
+            return ProbeMonitorViewController()
+        case .mail:
+            return SeekMailHomeViewController()
         case .search:
             return SearchViewController()
         case .recent:

@@ -10,7 +10,7 @@
 
 ## 版本号
 
-- 原版本读取工程所有 target 的 `MARKETING_VERSION`，当前是 `1.3.1`。
+- 原版本读取工程所有 target 的 `MARKETING_VERSION`，当前是 `1.4.0`。
 - 发版名称、标签和 App「关于」版本依次为 `1.3.1-1`、`1.3.1-2`；Git 标签带 `v` 前缀。
 - 序号按同一原版本已有的 fork 标签递增，原版本升级到 `1.3.2` 后从 `1.3.2-1` 开始。
 - iOS 的 `CFBundleShortVersionString` 保留数字格式，`CFBundleVersion` 使用序号；完整 fork 版本通过 `Build Release Version` 注入。

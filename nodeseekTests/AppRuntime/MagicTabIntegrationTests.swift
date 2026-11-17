@@ -232,11 +232,12 @@ final class MagicTabIntegrationTests: XCTestCase {
         XCTAssertEqual(browser.initialIndex, 1, "点开 IP 质量应定位到图库第二张")
         let cell = JXZoomImageCell(frame: .zero)
         presenter.photoBrowser(browser, willDisplay: cell, at: 1)
+        let expectedPixelHeight = Int(try XCTUnwrap(pages.last).height)
         for _ in 0..<100 {
-            if cell.imageView.image != nil { break }
+            if cell.imageView.image?.cgImage?.height == expectedPixelHeight { break }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
-        XCTAssertEqual(cell.imageView.image?.cgImage?.height, pages.last.map { Int($0.height) })
+        XCTAssertEqual(cell.imageView.image?.cgImage?.height, expectedPixelHeight)
         try await Task.sleep(nanoseconds: 300_000_000)
         try saveScreenshot(window, name: "magic-tabs-existing-browser")
         await withCheckedContinuation { continuation in
@@ -320,11 +321,15 @@ final class MagicTabIntegrationTests: XCTestCase {
         imageNode.updateLoadedImageSize(CGSize(width: 1840, height: 2125))
         let size = imageNode.calculateSizeThatFits(CGSize(width: 368, height: CGFloat.greatestFiniteMagnitude))
         XCTAssertEqual(size.height, 425, "TQ 报告应完整等比展示，不能裁成普通图片缩略图")
-        let imageView = try XCTUnwrap(imageNode.view.subviews.compactMap { $0 as? UIImageView }.first)
+        let blockView = try XCTUnwrap(imageNode.view as? DetailImageBlockView)
+        let imageView = try XCTUnwrap(blockView.subviews.compactMap { $0 as? UIImageView }.first)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let preview = UIGraphicsImageRenderer(size: CGSize(width: 368, height: 425), format: format).image { _ in }
-        imageView.image = UIImage(cgImage: try XCTUnwrap(preview.cgImage), scale: 2, orientation: .up)
+        blockView.applyLoadedImage(DetailInlineImageResult(
+            image: UIImage(cgImage: try XCTUnwrap(preview.cgImage), scale: 2, orientation: .up),
+            resolvedKind: nil, originalSize: CGSize(width: 1840, height: 2125)
+        ))
         imageNode.view.frame = CGRect(x: 0, y: 0, width: 368, height: 425)
         imageNode.view.layoutSubviews()
         XCTAssertEqual(imageView.contentMode, .scaleAspectFit, "内部 UIImageView 也应沿用报告类型")
@@ -360,11 +365,15 @@ final class MagicTabIntegrationTests: XCTestCase {
             XCTAssertEqual(node.calculateSizeThatFits(range.max).height, expectedHeight, "分栏原图不能按普通图片裁切")
             node.updateLoadedImageSize(CGSize(width: original.width / 16, height: original.height / 16))
             XCTAssertEqual(node.calculateSizeThatFits(range.max).height, expectedHeight, "缩略图加载与切栏返回都不能压缩报告高度")
-            let imageView = try XCTUnwrap(node.view.subviews.compactMap { $0 as? UIImageView }.first)
+            let blockView = try XCTUnwrap(node.view as? DetailImageBlockView)
+            let imageView = try XCTUnwrap(blockView.subviews.compactMap { $0 as? UIImageView }.first)
             let format = UIGraphicsImageRendererFormat()
             format.scale = 1
             let preview = UIGraphicsImageRenderer(size: original, format: format).image { _ in }
-            imageView.image = UIImage(cgImage: try XCTUnwrap(preview.cgImage), scale: 16, orientation: .up)
+            blockView.applyLoadedImage(DetailInlineImageResult(
+                image: UIImage(cgImage: try XCTUnwrap(preview.cgImage), scale: 16, orientation: .up),
+                resolvedKind: nil, originalSize: original
+            ))
             node.view.frame = CGRect(x: 0, y: 0, width: 368, height: expectedHeight)
             node.view.layoutSubviews()
             XCTAssertEqual(imageView.contentMode, .scaleAspectFit)
@@ -374,7 +383,7 @@ final class MagicTabIntegrationTests: XCTestCase {
         let ordinary = DetailContentBlockNodeFactory.makeNodes(from: [.image(.init(url: sources[0].0, altText: nil))],
             onImageTapped: { _, _ in }, onLinkTapped: { _ in }, onTextLayoutInvalidated: {},
             imageSizeProvider: { _ in sources[0].1 })
-        XCTAssertEqual(ordinary[0].calculateSizeThatFits(range.max).height, 184, "分栏之外仍沿用普通图片展示规则")
+        XCTAssertEqual(ordinary[0].calculateSizeThatFits(range.max).height, 368, "分栏之外仍沿用普通图片的等比缩放和高度上限")
     }
 
     func testActualDetailThirdTabUsesBasicHeightAndScrollsFullReport() async throws {
@@ -493,6 +502,7 @@ final class MagicTabIntegrationTests: XCTestCase {
 private final class TerminalTestPresenter: PostDetailPresenterProtocol {
     func viewDidLoad() {}
     func refreshInitialPage() {}
+    func didSelectCommentPage(_ page: Int) {}
     func didTapLogin() {}
     func didApproachCommentEnd() {}
     func didTapRefreshCommentsAtEnd() {}

@@ -38,6 +38,8 @@ enum MainTabItem: String, CaseIterable {
     case collections
     case comments
     case search
+    case probe
+    case mail
     case me
 
     /// 默认组合，和最初的多 Tab 模式一致。
@@ -54,6 +56,8 @@ enum MainTabItem: String, CaseIterable {
         case .collections: return "我的收藏"
         case .comments: return "我的评论"
         case .search: return "搜一搜"
+        case .probe: return "探针"
+        case .mail: return SeekMailL10n.text("邮箱")
         case .me: return "我的"
         }
     }
@@ -67,6 +71,8 @@ enum MainTabItem: String, CaseIterable {
         case .collections: return "star"
         case .comments: return "bubble.left"
         case .search: return "magnifyingglass"
+        case .probe: return "waveform.path.ecg"
+        case .mail: return "envelope"
         case .me: return "person"
         }
     }

@@ -23,6 +23,17 @@ struct PostListPresenterTests {
         #expect(view.renderedSortMode == .replyTime)
     }
 
+    @Test func viewDidLoadRendersSavedSortMode() {
+        let view = SpyPostListView()
+        let sortStore = InMemoryPostListSortPreferenceStore()
+        sortStore.sortMode = .postTime
+        let presenter = makePresenter(view: view, sortPreferenceStore: sortStore)
+
+        presenter.viewDidLoad()
+
+        #expect(view.renderedSortMode == .postTime)
+    }
+
     @Test func viewDidLoadRendersVisibleCategoriesFromPreferences() {
         let view = SpyPostListView()
         let store = makeCategoryPreferenceStore()
@@ -429,6 +440,7 @@ private func makePresenter(
     router: SpyPostListRouter? = nil,
     visitedStore: VisitedPostStoreProtocol = EmptyVisitedPostStore(),
     categoryPreferenceStore: PostCategoryPreferenceStore = makeCategoryPreferenceStore(),
+    sortPreferenceStore: PostListSortPreferenceStoring = InMemoryPostListSortPreferenceStore(),
     notificationUnreadCountInteractor: PostListNotificationUnreadCountInteractorProtocol? = nil,
     currentDateProvider: @escaping () -> Date = Date.init
 ) -> PostListPresenter {
@@ -437,6 +449,7 @@ private func makePresenter(
         router: router,
         visitedStore: visitedStore,
         categoryPreferenceStore: categoryPreferenceStore,
+        sortPreferenceStore: sortPreferenceStore,
         notificationUnreadCountInteractor: notificationUnreadCountInteractor,
         currentDateProvider: currentDateProvider
     )
@@ -562,6 +575,7 @@ private final class SpyPostListRouter: PostListRouterProtocol {
     var navigateToNewDiscussionCount = 0
     var navigateToSearchCount = 0
     var navigateToProbeMonitorCount = 0
+    var navigateToMailCount = 0
     var navigateToSettingsCount = 0
     var navigateToPostCategoryPreferencesCount = 0
     var navigateToLogFileCount = 0
@@ -631,6 +645,10 @@ private final class SpyPostListRouter: PostListRouterProtocol {
 
     func navigateToProbeMonitor() {
         navigateToProbeMonitorCount += 1
+    }
+
+    func navigateToMail() {
+        navigateToMailCount += 1
     }
 
     func navigateToSettings(

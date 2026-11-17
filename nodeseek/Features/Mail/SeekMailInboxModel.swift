@@ -1,0 +1,656 @@
+//
+//  SeekMailInboxModel.swift
+//  nodeseek
+//
+
+import Foundation
+
+/// 列表顶部的文件夹 tab。「已发送」不放：用 API 发出的邮件不在里面。
+nonisolated enum SeekMailFolderScope: Hashable, Sendable {
+    case inbox
+    case spam
+    case trash
+    case custom(Int64)
+
+    var storageValue: String {
+        switch self {
+        case .inbox: return "inbox"
+        case .spam: return "spam"
+        case .trash: return "trash"
+        case .custom(let id): return "folder:\(id)"
+        }
+    }
+
+    init?(storageValue: String) {
+        switch storageValue {
+        case "inbox": self = .inbox
+        case "spam": self = .spam
+        case "trash": self = .trash
+        default:
+            guard storageValue.hasPrefix("folder:"), let id = Int64(storageValue.dropFirst("folder:".count)) else { return nil }
+            self = .custom(id)
+        }
+    }
+
+    func apply(to query: inout SeekMailListQuery) {
+        switch self {
+        case .inbox: query.folder = .inbox
+        case .spam: query.folder = .spam
+        case .trash: query.folder = .trash
+        case .custom(let id): query.folderID = id
+        }
+    }
+}
+
+/// 记住上次选中的邮箱、文件夹和最近打开的邮箱。
+final class SeekMailSelectionStore {
+    private let defaults: UserDefaults
+    private enum Key {
+        /// 旧版本记住的邮箱；现在每次进入都从「全部」开始，只在清理时删掉。
+        static let mailbox = "seekMail.selectedMailboxID"
+        static let scope = "seekMail.selectedScope"
+        static let recents = "seekMail.recentMailboxIDs"
+        static let tagsExpanded = "seekMail.mailboxTagsExpanded"
+        static let autoRefresh = "seekMail.autoRefreshSeconds"
+    }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var scope: SeekMailFolderScope {
+        get { defaults.string(forKey: Key.scope).flatMap(SeekMailFolderScope.init(storageValue:)) ?? .inbox }
+        set { defaults.set(newValue.storageValue, forKey: Key.scope) }
+    }
+
+    /// 停在列表时自动检查新邮件的间隔（秒），0 表示关闭。
+    static let autoRefreshOptions = [0, 10, 20, 30, 60]
+    var autoRefreshSeconds: Int {
+        get { (defaults.object(forKey: Key.autoRefresh) as? Int) ?? 20 }
+        set { defaults.set(newValue, forKey: Key.autoRefresh) }
+    }
+
+    /// 邮箱标签区是否展开；默认折叠。
+    var tagsExpanded: Bool {
+        get { defaults.bool(forKey: Key.tagsExpanded) }
+        set { defaults.set(newValue, forKey: Key.tagsExpanded) }
+    }
+
+    var recentMailboxIDs: [Int64] {
+        (defaults.array(forKey: Key.recents) as? [NSNumber])?.map(\.int64Value) ?? []
+    }
+
+    func recordRecent(_ id: Int64) {
+        var ids = recentMailboxIDs.filter { $0 != id }
+        ids.insert(id, at: 0)
+        defaults.set(ids.prefix(3).map { NSNumber(value: $0) }, forKey: Key.recents)
+    }
+
+    func clear() {
+        [Key.mailbox, Key.scope, Key.recents, Key.tagsExpanded, Key.autoRefresh].forEach(defaults.removeObject(forKey:))
+    }
+}
+
+/// 邮件列表的状态：邮箱、文件夹、分页、搜索和延迟删除。界面只负责展示。
+final class SeekMailInboxModel {
+    enum Phase: Equatable {
+        case loading
+        case loaded
+        case failed(String)
+    }
+
+    static let pageSize = 20
+    /// 验证码卡片只放这段时间内收到的邮件。
+    static let codeFreshness: TimeInterval = 15 * 60
+
+    let provider: SeekMailProvider<SeekMailAPI>
+    let selectionStore: SeekMailSelectionStore
+    private let deleteDelay: TimeInterval
+    private let cache: SeekMailListCache?
+    /// 快照按 Key 指纹隔离，取不到 Key 时不读写快照。
+    private let cacheKey: () -> String?
+    /// 进程内短期缓存：邮箱列表和最近打开的详情，减少重复请求。
+    private let memoryCache: SeekMailMemoryCache?
+
+    private(set) var mailboxes: [SeekMailbox] = []
+    private(set) var names: [Int64: SeekMailboxDisplay] = [:]
+    private(set) var folders: [SeekMailFolder] = []
+    private(set) var selectedMailboxID: Int64?
+    private(set) var scope: SeekMailFolderScope = .inbox
+    private(set) var searchText = ""
+    private(set) var phase: Phase = .loading
+    private(set) var isLoadingMore = false
+    private(set) var hasMore = false
+    private(set) var rateLimitedUntil: Date?
+    /// 各邮箱未读数；没拿到之前为空，总数为 nil。
+    private(set) var unreadByMailbox: [Int64: Int] = [:]
+    private(set) var unreadTotal: Int?
+    /// 标签顺序：置顶 → 有未读 → 其他。只在拿到新数字时重排，本地标已读不重排，免得标签跳来跳去。
+    private(set) var mailboxOrder: [Int64] = []
+
+    private var allMails: [SeekMail] = []
+    private var pendingDeletes: [Int64: Task<Void, Never>] = [:]
+    private var loadTask: Task<Void, Never>?
+    /// 切换邮箱、文件夹或搜索后，旧请求的结果直接丢弃。
+    private var generation = 0
+
+    var onChange: (() -> Void)?
+    /// 401：入口页清掉 Key 并回到绑定页。
+    var onUnauthorized: (() -> Void)?
+    /// 列表已有内容时的失败，用 toast 提示而不是整页报错。
+    var onMessage: ((String) -> Void)?
+
+    init(
+        provider: SeekMailProvider<SeekMailAPI>,
+        selectionStore: SeekMailSelectionStore = SeekMailSelectionStore(),
+        deleteDelay: TimeInterval = 4,
+        cache: SeekMailListCache? = nil,
+        cacheKey: @escaping () -> String? = { nil },
+        memoryCache: SeekMailMemoryCache? = nil
+    ) {
+        self.provider = provider
+        self.selectionStore = selectionStore
+        self.deleteDelay = deleteDelay
+        self.cache = cache
+        self.cacheKey = cacheKey
+        self.memoryCache = memoryCache
+        scope = selectionStore.scope
+    }
+
+    deinit {
+        loadTask?.cancel()
+    }
+
+    // MARK: - 派生数据
+
+    /// 已排队删除的邮件先从列表隐藏。
+    var mails: [SeekMail] {
+        allMails.filter { pendingDeletes[$0.id] == nil }
+    }
+
+    var selectedMailbox: SeekMailbox? {
+        selectedMailboxID.flatMap { id in mailboxes.first { $0.id == id } }
+    }
+
+    var isTrash: Bool { scope == .trash }
+
+    /// 没有能发信的邮箱时不显示写信入口。
+    var canCompose: Bool { mailboxes.contains { $0.canSendMail } }
+    var isSearching: Bool { searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+
+    /// 「全部邮箱」时摘要开头标出收件邮箱。
+    var showsRecipientMailbox: Bool { selectedMailboxID == nil }
+
+    var selectionTitle: String {
+        guard let id = selectedMailboxID else { return SeekMailL10n.text("全部邮箱") }
+        return names[id]?.title ?? SeekMailL10n.text("邮箱")
+    }
+
+    var scopeTitle: String { title(for: scope) }
+
+    func title(for scope: SeekMailFolderScope) -> String {
+        switch scope {
+        case .inbox: return SeekMailL10n.text("收件箱")
+        case .spam: return SeekMailL10n.text("垃圾邮件")
+        case .trash: return SeekMailL10n.text("回收站")
+        case .custom(let id):
+            guard let folder = folders.first(where: { $0.id == id }) else { return SeekMailL10n.text("文件夹") }
+            return [folder.icon, folder.name].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " ")
+        }
+    }
+
+    var scopes: [SeekMailFolderScope] {
+        [.inbox, .spam, .trash] + folders.map { .custom($0.id) }
+    }
+
+    /// 当前范围内 15 分钟内最新的一封带验证码的邮件；搜索时不显示。
+    func latestCodeMail(now: Date = Date()) -> SeekMail? {
+        guard isSearching == false, isTrash == false else { return nil }
+        return mails
+            .filter { mail in
+                guard mail.verificationCode != nil, let date = mail.receivedAt else { return false }
+                return now.timeIntervalSince(date) <= Self.codeFreshness
+            }
+            .max { ($0.receivedAt ?? .distantPast) < ($1.receivedAt ?? .distantPast) }
+    }
+
+    func mail(id: Int64) -> SeekMail? {
+        allMails.first { $0.id == id }
+    }
+
+    // MARK: - 加载
+
+    /// 首次进入：邮箱和文件夹拿到后再加载邮件。
+    func start() {
+        phase = .loading
+        isLoadingMore = false
+        restoreSnapshot()
+        onChange?()
+        refreshUnreadCounts()
+        generation += 1
+        let token = generation
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                // 几分钟内重新进入邮箱，邮箱和文件夹基本不会变，只拉邮件
+                if let key = cacheKey(), let cached = memoryCache?.mailboxes(for: key) {
+                    applyMailboxes(cached.mailboxes, folders: cached.folders)
+                    try await fetchFirstPage(token: token)
+                    return
+                }
+                async let mailboxRequest = provider.mailboxes()
+                // 文件夹没有也能用，权限不足时不影响收件箱
+                async let folderRequest: [SeekMailFolder]? = try? provider.folders()
+                let (mailboxes, folders) = try await (mailboxRequest, folderRequest)
+                guard token == generation else { return }
+                applyMailboxes(mailboxes, folders: folders ?? [])
+                if let key = cacheKey() {
+                    cache?.saveMailboxes(mailboxes, folders: folders ?? [], for: key)
+                    // 文件夹请求失败时不进内存缓存，下次进入再试
+                    if let folders { memoryCache?.saveMailboxes(mailboxes, folders: folders, for: key) }
+                }
+                try await fetchFirstPage(token: token)
+            } catch {
+                guard token == generation else { return }
+                handle(error)
+            }
+        }
+    }
+
+    func reload() {
+        guard mailboxes.isEmpty == false else {
+            start()
+            return
+        }
+        generation += 1
+        let token = generation
+        // 新的首页请求接管分页状态，旧分页回调会因 generation 不同被忽略。
+        isLoadingMore = false
+        if allMails.isEmpty { phase = .loading }
+        onChange?()
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await fetchFirstPage(token: token)
+            } catch {
+                guard token == generation else { return }
+                handle(error)
+            }
+        }
+    }
+
+    func loadMoreIfNeeded() {
+        guard hasMore, isLoadingMore == false, phase == .loaded else { return }
+        isLoadingMore = true
+        let token = generation
+        let offset = allMails.count
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let list = try await provider.mails(query(offset: offset))
+                guard token == generation else { return }
+                let known = Set(allMails.map(\.id))
+                allMails += list.mails.filter { known.contains($0.id) == false }
+                hasMore = Self.hasMore(list, received: list.mails.count, offset: offset)
+                isLoadingMore = false
+                onChange?()
+            } catch {
+                guard token == generation else { return }
+                isLoadingMore = false
+                handle(error)
+            }
+        }
+    }
+
+    func selectMailbox(_ id: Int64?) {
+        guard id != selectedMailboxID else { return }
+        selectedMailboxID = id
+        if let id { selectionStore.recordRecent(id) }
+        resetAndReload()
+    }
+
+    func selectScope(_ scope: SeekMailFolderScope) {
+        guard scope != self.scope else { return }
+        self.scope = scope
+        selectionStore.scope = scope
+        resetAndReload()
+    }
+
+    func setSearchText(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != searchText.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        searchText = text
+        resetAndReload()
+    }
+
+    private func resetAndReload() {
+        commitPendingDeletes()
+        allMails = []
+        hasMore = false
+        isLoadingMore = false
+        // 切到看过的范围时先显示上次的内容
+        if isSearching == false, let key = cacheKey(), let cached = cache?.mails(for: key, page: currentPageKey) {
+            allMails = cached
+            phase = .loaded
+        }
+        reload()
+    }
+
+    private var currentPageKey: String {
+        SeekMailListCache.pageKey(mailboxID: selectedMailboxID, scope: scope)
+    }
+
+    /// 先显示上次的邮箱和第一页，网络回来后再替换。
+    private func restoreSnapshot() {
+        guard let key = cacheKey(), let cache, let saved = cache.mailboxes(for: key) else { return }
+        applyMailboxes(saved.mailboxes, folders: saved.folders)
+        if let mails = cache.mails(for: key, page: currentPageKey) {
+            allMails = mails
+            phase = .loaded
+        }
+    }
+
+    private func applyMailboxes(_ mailboxes: [SeekMailbox], folders: [SeekMailFolder]) {
+        self.mailboxes = mailboxes
+        self.folders = folders.sorted { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
+        names = SeekMailboxNaming.displays(for: mailboxes)
+        sortMailboxes()
+        // 选中的邮箱或记住的文件夹已被删掉，回到默认
+        if let id = selectedMailboxID, mailboxes.contains(where: { $0.id == id }) == false {
+            selectedMailboxID = nil
+        }
+        if case .custom(let id) = scope, folders.contains(where: { $0.id == id }) == false {
+            scope = .inbox
+            selectionStore.scope = .inbox
+        }
+    }
+
+    private func fetchFirstPage(token: Int) async throws {
+        let list = try await provider.mails(query(offset: 0))
+        guard token == generation else { return }
+        allMails = list.mails
+        hasMore = Self.hasMore(list, received: list.mails.count, offset: 0)
+        phase = .loaded
+        if isSearching == false, let key = cacheKey() {
+            cache?.saveMails(list.mails, for: key, page: currentPageKey)
+        }
+        clearRateLimitIfExpired()
+        onChange?()
+    }
+
+    private func query(offset: Int) -> SeekMailListQuery {
+        var query = SeekMailListQuery(mailboxID: selectedMailboxID, limit: Self.pageSize, offset: offset)
+        scope.apply(to: &query)
+        query.search = isSearching ? searchText : nil
+        return query
+    }
+
+    private static func hasMore(_ list: SeekMailList, received: Int, offset: Int) -> Bool {
+        if let pagination = list.pagination { return offset + received < pagination.total && received > 0 }
+        return received >= pageSize
+    }
+
+    private func clearRateLimitIfExpired() {
+        if let until = rateLimitedUntil, until <= Date() { rateLimitedUntil = nil }
+    }
+
+    private func handle(_ error: Error) {
+        if error is CancellationError { return }
+        let mailError = error as? SeekMailError
+        if case .unauthorized? = mailError {
+            onUnauthorized?()
+            return
+        }
+        if case .rateLimited(let resetAt)? = mailError {
+            rateLimitedUntil = resetAt ?? Date().addingTimeInterval(60)
+        }
+        let message = mailError?.userMessage ?? SeekMailL10n.text("加载失败，请稍后重试")
+        if allMails.isEmpty, mailboxes.isEmpty || phase != .loaded {
+            phase = .failed(message)
+        } else {
+            phase = .loaded
+            if case .rateLimited? = mailError {} else { onMessage?(message) }
+        }
+        onChange?()
+    }
+
+    // MARK: - 操作（先改本地，失败再改回）
+
+    func setRead(_ id: Int64, read: Bool, silent: Bool = false) {
+        guard let original = mail(id: id), original.isRead != read else { return }
+        adjustUnread(mailboxID: original.mailboxId, by: read ? -1 : 1)
+        update(id) { $0.isRead = read }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await provider.markRead(id: id, read: read)
+            } catch {
+                adjustUnread(mailboxID: original.mailboxId, by: read ? 1 : -1)
+                update(id) { $0.isRead = original.isRead }
+                if silent == false { report(error) }
+            }
+        }
+    }
+
+    /// 详情 2 分钟内复用上次成功的结果；已读和星标以列表里的最新状态为准。
+    func loadDetail(id: Int64) async throws -> SeekMailDetail {
+        let key = cacheKey()
+        if let key, var cached = memoryCache?.detail(id: id, for: key) {
+            if let current = mail(id: id) {
+                cached.mail.isRead = current.isRead
+                cached.mail.isFlagged = current.isFlagged
+            }
+            return cached
+        }
+        let detail = try await provider.mail(id: id)
+        if let key { memoryCache?.saveDetail(detail, for: key) }
+        return detail
+    }
+
+    func loadAttachments(mailID: Int64) async throws -> [SeekMailAttachment] {
+        let key = cacheKey()
+        if let key, let cached = memoryCache?.attachments(mailID: mailID, for: key) { return cached }
+        let list = try await provider.attachments(mailID: mailID)
+        if let key { memoryCache?.saveAttachments(list, mailID: mailID, for: key) }
+        return list
+    }
+
+    /// 打开详情时标已读，失败不提示；不在列表里的邮件直接发请求。
+    func markOpened(_ id: Int64) {
+        if let mail = mail(id: id) {
+            if mail.isRead == false { setRead(id, read: true, silent: true) }
+            return
+        }
+        Task { [provider] in try? await provider.markRead(id: id, read: true) }
+    }
+
+    func setFlagged(_ id: Int64, flagged: Bool) {
+        guard let original = mail(id: id), original.isFlagged != flagged else { return }
+        update(id) { $0.isFlagged = flagged }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await provider.markFlagged(id: id, flagged: flagged)
+            } catch {
+                update(id) { $0.isFlagged = original.isFlagged }
+                report(error)
+            }
+        }
+    }
+
+    /// folderID 为 nil 表示移回收件箱。移走后不再属于当前文件夹，从列表去掉。
+    func move(_ id: Int64, toFolderID folderID: Int64?) {
+        guard let index = allMails.firstIndex(where: { $0.id == id }) else { return }
+        let removed = allMails.remove(at: index)
+        let token = generation
+        memoryCache?.removeMail(id: id)
+        onChange?()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await provider.moveMail(id: id, folderID: folderID)
+            } catch {
+                // 切换范围或刷新后，不能把旧列表的邮件插入新结果。
+                if token == generation {
+                    allMails.insert(removed, at: min(index, allMails.count))
+                    onChange?()
+                }
+                report(error)
+            }
+        }
+    }
+
+    /// 回收站里的邮件接口无法恢复，所以先隐藏，等一会儿再真正删除，期间可撤销。
+    func scheduleDelete(_ id: Int64) {
+        guard isTrash == false, mail(id: id) != nil, pendingDeletes[id] == nil else { return }
+        let delay = deleteDelay
+        memoryCache?.removeMail(id: id)
+        pendingDeletes[id] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard Task.isCancelled == false else { return }
+            await self?.performDelete(id)
+        }
+        onChange?()
+    }
+
+    var hasPendingDeletes: Bool { pendingDeletes.isEmpty == false }
+
+    func undoDelete(_ id: Int64) {
+        guard let task = pendingDeletes.removeValue(forKey: id) else { return }
+        task.cancel()
+        onChange?()
+    }
+
+    /// 离开页面、切换范围或 App 进入后台时，不再等待，立即删除。
+    func commitPendingDeletes() {
+        let ids = Array(pendingDeletes.keys)
+        for id in ids {
+            pendingDeletes[id]?.cancel()
+            Task { [weak self] in await self?.performDelete(id) }
+        }
+    }
+
+    private func performDelete(_ id: Int64) async {
+        guard pendingDeletes[id] != nil else { return }
+        do {
+            try await provider.deleteMail(id: id)
+            pendingDeletes[id] = nil
+            if let removed = allMails.first(where: { $0.id == id }), removed.isRead == false {
+                adjustUnread(mailboxID: removed.mailboxId, by: -1)
+            }
+            allMails.removeAll { $0.id == id }
+            onChange?()
+        } catch {
+            // 删除失败，邮件重新出现
+            pendingDeletes[id] = nil
+            onChange?()
+            report(error)
+        }
+    }
+
+    // MARK: - 自动刷新
+
+    /// 剩余额度低于这个数就不自动刷新，留给用户手动操作。seek.li 每个请求实际扣 2。
+    static let autoRefreshQuotaReserve = 20
+    private var isAutoRefreshing = false
+
+    /// 停在列表时定时调用：额度不够或被限流时跳过；先查未读数（1 个请求），有变化才刷新列表。
+    func autoRefresh(now: Date = Date()) {
+        guard phase == .loaded, isSearching == false, isLoadingMore == false, isAutoRefreshing == false else { return }
+        if let until = rateLimitedUntil, until > now { return }
+        if let limit = provider.rateLimit, now.timeIntervalSince(limit.observedAt) < 60,
+           limit.remaining < Self.autoRefreshQuotaReserve {
+            return
+        }
+        isAutoRefreshing = true
+        let previous = unreadTotal.map { SeekMailUnreadCounts(byMailbox: unreadByMailbox, total: $0) }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isAutoRefreshing = false }
+            do {
+                let counts = try await provider.unreadCounts()
+                guard counts != previous else { return }
+                applyUnreadCounts(counts)
+                reload()
+            } catch {
+                // 静默失败；被限流时记下时间，到期前不再自动刷新
+                if case .rateLimited(let resetAt)? = error as? SeekMailError {
+                    rateLimitedUntil = resetAt ?? now.addingTimeInterval(60)
+                    onChange?()
+                }
+            }
+        }
+    }
+
+    // MARK: - 未读数
+
+    /// 进入邮箱和下拉刷新时请求一次；失败不提示，标签只是不显示数字。
+    func refreshUnreadCounts() {
+        Task { [weak self] in
+            guard let self, let counts = try? await provider.unreadCounts() else { return }
+            applyUnreadCounts(counts)
+        }
+    }
+
+    /// 也用于复用回到前台时检查到的数字，不再单独请求。
+    func applyUnreadCounts(_ counts: SeekMailUnreadCounts) {
+        unreadByMailbox = counts.byMailbox
+        unreadTotal = counts.total
+        sortMailboxes()
+        onChange?()
+    }
+
+    private func sortMailboxes() {
+        let sections = SeekMailboxPickerSections.make(
+            mailboxes: mailboxes, names: names, counts: unreadByMailbox, recentIDs: [], query: ""
+        )
+        mailboxOrder = (sections.pinned + sections.unread + sections.others).map(\.mailboxID)
+    }
+
+    /// 新建邮箱成功：加进标签并切过去；缓存里的邮箱列表同步更新，免得下次进入看不到它。
+    func addCreatedMailbox(_ mailbox: SeekMailbox) {
+        if mailboxes.contains(where: { $0.id == mailbox.id }) == false {
+            applyMailboxes(mailboxes + [mailbox], folders: folders)
+            if let key = cacheKey() {
+                cache?.saveMailboxes(mailboxes, folders: folders, for: key)
+                memoryCache?.saveMailboxes(mailboxes, folders: folders, for: key)
+            }
+        }
+        selectMailbox(mailbox.id)
+        onChange?()
+    }
+
+    /// 「全部标为已读」每成功一封调用一次：列表里有就改圆点，未读数减一。
+    func applyMarkedRead(id: Int64, mailboxID: Int64) {
+        if let mail = mail(id: id), mail.isRead { return }
+        adjustUnread(mailboxID: mailboxID, by: -1)
+        if mail(id: id) != nil {
+            update(id) { $0.isRead = true }
+        } else {
+            onChange?()
+        }
+    }
+
+    /// 本地标已读、删除时就地加减，不再请求；还没拿到数字时不动。
+    private func adjustUnread(mailboxID: Int64, by delta: Int) {
+        guard let total = unreadTotal else { return }
+        unreadTotal = max(total + delta, 0)
+        unreadByMailbox[mailboxID] = max((unreadByMailbox[mailboxID] ?? 0) + delta, 0)
+    }
+
+    private func update(_ id: Int64, _ change: (inout SeekMail) -> Void) {
+        guard let index = allMails.firstIndex(where: { $0.id == id }) else { return }
+        change(&allMails[index])
+        onChange?()
+    }
+
+    private func report(_ error: Error) {
+        if case .unauthorized? = error as? SeekMailError {
+            onUnauthorized?()
+            return
+        }
+        onMessage?((error as? SeekMailError)?.userMessage ?? SeekMailL10n.text("操作失败，请稍后重试"))
+    }
+}

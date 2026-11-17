@@ -2,6 +2,7 @@ import UIKit
 
 /// 探针列表：一个探针一张汇总卡，下面只显示当前卡片的服务器。
 final class ProbeMonitorViewController: UIViewController {
+    private var keyboardDismissCoordinator: KeyboardDismissCoordinator?
     let viewModel: ProbeMonitorViewModel
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let heroCarousel = ProbeHeroCarouselView()
@@ -23,6 +24,7 @@ final class ProbeMonitorViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        keyboardDismissCoordinator = KeyboardDismissCoordinator(rootView: view, backgrounds: [view, tableView])
         view.backgroundColor = ProbeStyle.background
         configureTable()
         configureHeader()
@@ -170,7 +172,6 @@ final class ProbeMonitorViewController: UIViewController {
 
     private func render() {
         let hasInstances = !viewModel.instances.isEmpty
-        tableView.backgroundView = hasInstances ? nil : emptyView
         tableView.tableHeaderView = hasInstances ? headerContainer : nil
         searchBar.isHidden = !hasInstances
         configureNavigationItems()
@@ -185,10 +186,18 @@ final class ProbeMonitorViewController: UIViewController {
         errorLabel.text = viewModel.selectedErrorMessage
         errorLabel.isHidden = viewModel.selectedErrorMessage == nil
         let isEmptyResult = viewModel.sections.isEmpty && !viewModel.visibleEntries.isEmpty
+        if let old = tableView.backgroundView { keyboardDismissCoordinator?.unregister(old) }
         tableView.backgroundView = viewModel.instances.isEmpty ? emptyView : isEmptyResult ? makeNoResultView() : nil
+        if let background = tableView.backgroundView { keyboardDismissCoordinator?.register(background) }
     }
 
     private func configureNavigationItems() {
+        // 探针状态变化会重建菜单，作为 Tab 根页面时同步到外层导航栏。
+        defer {
+            if let tabs = parent as? MainTabBarController, tabs.selectedViewController === self {
+                tabs.syncNavigationItemWithSelectedTab()
+            }
+        }
         guard !viewModel.instances.isEmpty else {
             navigationItem.rightBarButtonItems = []
             return

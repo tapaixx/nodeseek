@@ -22,6 +22,7 @@ final class PostListSideMenuViewController: UIViewController {
     var onUserCollectionsTapped: (() -> Void)?
     var onSearchTapped: (() -> Void)?
     var onProbeTapped: (() -> Void)?
+    var onMailTapped: (() -> Void)?
     var onSettingsTapped: (() -> Void)?
     private let accountController: PostListSideMenuAccountController
     private let notificationClient: NodeSeekNotificationClientProtocol
@@ -148,6 +149,12 @@ final class PostListSideMenuViewController: UIViewController {
         return button
     }()
 
+    private let mailButton: UIButton = {
+        let button = PostListSideMenuViewController.makeMenuButton(title: SeekMailL10n.text("邮箱"), systemImageName: "envelope")
+        button.accessibilityIdentifier = "post-list-side-menu-mail-button"
+        return button
+    }()
+
     private let recentVisitedButton: UIButton = {
         let button = PostListSideMenuViewController.makeMenuButton(title: "最近浏览", systemImageName: "clock.arrow.circlepath")
         button.accessibilityIdentifier = "post-list-side-menu-recent-visited-button"
@@ -210,6 +217,23 @@ final class PostListSideMenuViewController: UIViewController {
         configureAccountController()
         observeNotificationUnreadCount()
         accountController.start()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(applyMailUnreadCount),
+            name: SeekMailUnreadMonitor.didChangeNotification, object: nil
+        )
+        SeekMailUnreadMonitor.shared.start()
+        applyMailUnreadCount()
+    }
+
+    /// 和通知一样有未读时图标变红，标题后面带上未读数。
+    @objc private func applyMailUnreadCount() {
+        let badge = SeekMailUnreadMonitor.badgeText(SeekMailUnreadMonitor.shared.totalUnread)
+        var configuration = mailButton.configuration
+        configuration?.title = badge.map { SeekMailL10n.format("邮箱 %@", $0) } ?? SeekMailL10n.text("邮箱")
+        let iconColor: UIColor = badge == nil ? .label : .systemRed
+        configuration?.imageColorTransformer = UIConfigurationColorTransformer { _ in iconColor }
+        mailButton.configuration = configuration
+        mailButton.accessibilityValue = badge.map { "\($0) 封未读" }
     }
 
     override func viewDidLayoutSubviews() {
@@ -350,6 +374,7 @@ final class PostListSideMenuViewController: UIViewController {
         notificationButton.addTarget(self, action: #selector(notificationButtonTapped), for: .touchUpInside)
         recentVisitedButton.addTarget(self, action: #selector(recentVisitedButtonTapped), for: .touchUpInside)
         probeButton.addTarget(self, action: #selector(probeButtonTapped), for: .touchUpInside)
+        mailButton.addTarget(self, action: #selector(mailButtonTapped), for: .touchUpInside)
         searchButton.addTarget(self, action: #selector(searchButtonTapped), for: .touchUpInside)
         postsEntryButton.addTarget(self, action: #selector(postsEntryButtonTapped), for: .touchUpInside)
         commentsEntryButton.addTarget(self, action: #selector(commentsEntryButtonTapped), for: .touchUpInside)
@@ -371,6 +396,7 @@ final class PostListSideMenuViewController: UIViewController {
         sideMenuView.addSubview(searchButton)
         sideMenuView.addSubview(recentVisitedButton)
         sideMenuView.addSubview(probeButton)
+        sideMenuView.addSubview(mailButton)
         sideMenuView.addSubview(settingsButton)
 
         let sideMenuLeadingConstraint = sideMenuView.leadingAnchor.constraint(
@@ -419,38 +445,54 @@ final class PostListSideMenuViewController: UIViewController {
             settingsButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             settingsButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
             settingsButton.bottomAnchor.constraint(equalTo: sideMenuView.safeAreaLayoutGuide.bottomAnchor, constant: -18),
-            settingsButton.heightAnchor.constraint(equalToConstant: 48),
+            Self.menuButtonHeight(settingsButton),
 
             probeButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             probeButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
-            probeButton.bottomAnchor.constraint(equalTo: settingsButton.topAnchor, constant: -8),
-            probeButton.heightAnchor.constraint(equalToConstant: 48),
+            probeButton.bottomAnchor.constraint(equalTo: mailButton.topAnchor, constant: -8),
+            Self.menuButtonHeight(probeButton),
+
+            mailButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
+            mailButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
+            mailButton.bottomAnchor.constraint(equalTo: settingsButton.topAnchor, constant: -8),
+            Self.menuButtonHeight(mailButton),
 
             recentVisitedButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             recentVisitedButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
             recentVisitedButton.bottomAnchor.constraint(equalTo: probeButton.topAnchor, constant: -8),
-            recentVisitedButton.heightAnchor.constraint(equalToConstant: 48),
+            Self.menuButtonHeight(recentVisitedButton),
 
             searchButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             searchButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
             searchButton.bottomAnchor.constraint(equalTo: recentVisitedButton.topAnchor, constant: -8),
-            searchButton.heightAnchor.constraint(equalToConstant: 48),
+            Self.menuButtonHeight(searchButton),
 
             notificationButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             notificationButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
             notificationButton.bottomAnchor.constraint(equalTo: searchButton.topAnchor, constant: -8),
-            notificationButton.heightAnchor.constraint(equalToConstant: 48),
+            Self.menuButtonHeight(notificationButton),
 
             checkInButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             checkInButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
             checkInButton.bottomAnchor.constraint(equalTo: notificationButton.topAnchor, constant: -8),
-            checkInButton.heightAnchor.constraint(equalToConstant: 48),
+            Self.menuButtonHeight(checkInButton),
 
             newDiscussionButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             newDiscussionButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
             newDiscussionButton.bottomAnchor.constraint(equalTo: checkInButton.topAnchor, constant: -8),
-            newDiscussionButton.heightAnchor.constraint(equalToConstant: 48)
+            Self.menuButtonHeight(newDiscussionButton),
+
+            // 4 英寸屏放不下全部按钮时压缩按钮高度，不和顶部账号区重叠
+            newDiscussionButton.topAnchor.constraint(greaterThanOrEqualTo: extensionEntryStackView.bottomAnchor, constant: 12)
         ])
+    }
+
+    /// 菜单按钮默认 48pt 高，空间不足时最低压到 40pt。
+    private static func menuButtonHeight(_ button: UIButton) -> NSLayoutConstraint {
+        let preferred = button.heightAnchor.constraint(equalToConstant: 48)
+        preferred.priority = .defaultHigh
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
+        return preferred
     }
 
     private func setExtensionEntriesVisible(_ isVisible: Bool) {
@@ -523,6 +565,11 @@ final class PostListSideMenuViewController: UIViewController {
     @objc private func probeButtonTapped() {
         hide(animated: true)
         onProbeTapped?()
+    }
+
+    @objc private func mailButtonTapped() {
+        hide(animated: true)
+        onMailTapped?()
     }
 
     @objc private func searchButtonTapped() {
