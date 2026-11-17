@@ -120,6 +120,7 @@ final class SeekMailInboxModel {
     private(set) var searchText = ""
     private(set) var phase: Phase = .loading
     private(set) var isLoadingMore = false
+    private(set) var isRefreshing = false
     private(set) var hasMore = false
     private(set) var rateLimitedUntil: Date?
     /// 各邮箱未读数；没拿到之前为空，总数为 nil。
@@ -223,6 +224,7 @@ final class SeekMailInboxModel {
     /// 首次进入：邮箱和文件夹拿到后再加载邮件。
     func start() {
         phase = .loading
+        isRefreshing = true
         isLoadingMore = false
         restoreSnapshot()
         onChange?()
@@ -232,6 +234,7 @@ final class SeekMailInboxModel {
         loadTask?.cancel()
         loadTask = Task { [weak self] in
             guard let self else { return }
+            defer { if token == generation { isRefreshing = false; onChange?() } }
             do {
                 // 几分钟内重新进入邮箱，邮箱和文件夹基本不会变，只拉邮件
                 if let key = cacheKey(), let cached = memoryCache?.mailboxes(for: key) {
@@ -265,6 +268,7 @@ final class SeekMailInboxModel {
         }
         generation += 1
         let token = generation
+        isRefreshing = true
         // 新的首页请求接管分页状态，旧分页回调会因 generation 不同被忽略。
         isLoadingMore = false
         if allMails.isEmpty { phase = .loading }
@@ -272,6 +276,7 @@ final class SeekMailInboxModel {
         loadTask?.cancel()
         loadTask = Task { [weak self] in
             guard let self else { return }
+            defer { if token == generation { isRefreshing = false; onChange?() } }
             do {
                 try await fetchFirstPage(token: token)
             } catch {
@@ -282,7 +287,7 @@ final class SeekMailInboxModel {
     }
 
     func loadMoreIfNeeded() {
-        guard hasMore, isLoadingMore == false, phase == .loaded else { return }
+        guard hasMore, !isRefreshing, isLoadingMore == false, phase == .loaded else { return }
         isLoadingMore = true
         let token = generation
         let offset = allMails.count
@@ -370,8 +375,23 @@ final class SeekMailInboxModel {
     private func fetchFirstPage(token: Int) async throws {
         let list = try await provider.mails(query(offset: 0))
         guard token == generation else { return }
-        allMails = list.mails
-        hasMore = Self.hasMore(list, received: list.mails.count, offset: 0)
+        let wasPaginated = allMails.count > Self.pageSize
+        let previousHasMore = hasMore
+        if wasPaginated, !list.mails.isEmpty, (list.pagination?.total ?? Int.max) > list.mails.count {
+            // 刷新只替换服务端已覆盖的前段，保留读过的后续页，避免自动刷新把用户拉回第一页。
+            let boundary = list.mails.reversed().compactMap { mail in allMails.firstIndex { $0.id == mail.id } }.first
+            let tail = allMails.dropFirst(boundary.map { $0 + 1 } ?? 0)
+            let freshIDs = Set(list.mails.map(\.id))
+            allMails = list.mails + tail.filter { !freshIDs.contains($0.id) }
+            if let total = list.pagination?.total { allMails = Array(allMails.prefix(total)) }
+        } else {
+            allMails = list.mails
+        }
+        if let pagination = list.pagination {
+            hasMore = allMails.count < pagination.total && !list.mails.isEmpty
+        } else {
+            hasMore = wasPaginated ? previousHasMore : Self.hasMore(list, received: list.mails.count, offset: 0)
+        }
         phase = .loaded
         if isSearching == false, let key = cacheKey() {
             cache?.saveMails(list.mails, for: key, page: currentPageKey)

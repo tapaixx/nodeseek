@@ -143,6 +143,54 @@ struct SeekMailInboxModelTests {
         #expect(model.mails.map(\.id) == [99])
     }
 
+    @Test func refreshKeepsLoadedPagesAndDeduplicatesNewFirstPage() async throws {
+        let transport = SeekMailRouteTransport()
+        transport.mailPages = [
+            Self.page(ids: Array(1...20), total: 60, offset: 0),
+            Self.page(ids: Array(21...40), total: 60, offset: 20),
+            Self.page(ids: [100] + Array(1...19), total: 61, offset: 0),
+            Self.page(ids: Array(41...60), total: 61, offset: 41)
+        ]
+        let model = makeModel(transport)
+        model.start()
+        await mailWaitUntil { !model.isRefreshing }
+        model.loadMoreIfNeeded()
+        await mailWaitUntil { model.mails.count == 40 }
+        model.reload()
+        #expect(model.isRefreshing)
+        #expect(model.mails.count == 40)
+        await mailWaitUntil { !model.isRefreshing }
+        #expect(model.mails.map(\.id) == [100] + Array(1...40).map(Int64.init))
+        #expect(model.hasMore)
+        model.loadMoreIfNeeded()
+        await mailWaitUntil { model.mails.count == 61 }
+        #expect(Set(model.mails.map(\.id)).count == 61)
+        #expect(!model.hasMore)
+        #expect(transport.requests.last?.url?.query?.contains("offset=41") == true)
+    }
+
+    @Test func refreshEmptyRangeAndMailboxSwitchDiscardOldPages() async {
+        let transport = SeekMailRouteTransport()
+        transport.mailPages = [
+            Self.page(ids: Array(1...20), total: 40, offset: 0),
+            Self.page(ids: Array(21...40), total: 40, offset: 20),
+            Self.page(ids: [], total: 0, offset: 0),
+            Self.page(ids: [99], total: 1, offset: 0)
+        ]
+        let model = makeModel(transport)
+        model.start()
+        await mailWaitUntil { !model.isRefreshing }
+        model.loadMoreIfNeeded()
+        await mailWaitUntil { model.mails.count == 40 }
+        model.reload()
+        await mailWaitUntil { !model.isRefreshing }
+        #expect(model.mails.isEmpty)
+        #expect(!model.hasMore)
+        model.selectMailbox(2)
+        await mailWaitUntil { !model.isRefreshing }
+        #expect(model.mails.map(\.id) == [99])
+    }
+
     @Test func reenteringStartsFromAllMailboxesAndForgetsMissingFolder() async {
         let selection = makeSelectionStore()
         selection.scope = .custom(5)

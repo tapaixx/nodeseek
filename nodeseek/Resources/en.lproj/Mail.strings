@@ -158,3 +158,12 @@
 "目前 seek.li 接口查不到已发送的邮件，App 里只能收信和写信，看不到发件记录。" = "Sent mail is not available from the seek.li API, so the app can receive and send but cannot show sent messages.";
 
 "收起键盘" = "Dismiss keyboard";
+
+// 邮箱选择与收信体验
+"选择邮箱" = "Choose mailbox";
+"搜索邮箱名称或地址" = "Search mailbox names or addresses";
+"最近使用" = "Recent";
+"置顶邮箱" = "Pinned mailboxes";
+"没有找到匹配的邮箱" = "No matching mailboxes";
+"%@ 个邮箱" = "%@ mailboxes";
+"仅收信" = "Receive only";

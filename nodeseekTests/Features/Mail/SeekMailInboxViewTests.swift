@@ -94,55 +94,33 @@ struct SeekMailInboxViewTests {
         #expect(field.text?.isEmpty ?? true)
     }
 
-    @Test func mailboxTagsCollapseToTwoRowsAndKeepSelectionVisible() async throws {
+    @Test func manyMailboxesUseCompactSwitcherAndDirectCopy() async throws {
         let transport = SeekMailRouteTransport()
-        let boxes = (1...12).map { #"{"id":\#($0),"address":"box\#($0)@seek.li"}"# }.joined(separator: ",")
+        let boxes = (1...12).map { #"{"id":\#($0),"address":"box\#($0)@nodeseek.org"}"# }.joined(separator: ",")
         transport.mailboxes = #"{"data":[\#(boxes)]}"#
-        transport.details["/openapi/v1/mails/counts"] = #"{"data":{"mailboxes":{"3":4},"total":4}}"#
-        let selection = makeSelectionStore()
         let inbox = SeekMailInboxViewController(
-            keyStore: InMemorySeekMailKeyStore(key: "sk_live_ok"), transport: transport.load, selectionStore: selection
+            keyStore: InMemorySeekMailKeyStore(key: "sk_live_test"), transport: transport.load, selectionStore: makeSelectionStore()
         )
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = inbox
         window.isHidden = false
         defer { window.isHidden = true }
-        await mailWaitUntil { inbox.model.phase == .loaded && inbox.model.unreadTotal == 4 }
-        // 选中排在最后的邮箱，折叠后也要看得到
-        inbox.model.selectMailbox(12)
         await mailWaitUntil { inbox.model.phase == .loaded }
+        inbox.model.selectMailbox(12)
+        await mailWaitUntil { !inbox.model.isRefreshing }
         inbox.view.layoutIfNeeded()
-
-        let tagsView = try #require(inbox.view.mailTestView(id: "seek-mail-tags"))
-        let toggle = try #require(tagsView.mailTestView(id: "seek-mail-tags-toggle") as? UIButton)
-        func title(_ button: UIButton?) -> String? { button?.configuration?.attributedTitle.map { String($0.characters) } }
-        func visibleTags() -> [UIButton] {
-            tagsView.subviews.flatMap(\.subviews).compactMap { $0 as? UIButton }
-                .filter { $0.isHidden == false && $0.accessibilityIdentifier?.hasPrefix("seek-mail-tag-") == true }
-        }
-
-        // 折叠：最多两行，末尾「展开 N 个」，选中的邮箱虽然排在最后也要看得到
-        #expect(toggle.isHidden == false)
-        #expect(title(toggle)?.hasPrefix("展开") == true)
-        #expect(visibleTags().allSatisfy { $0.frame.maxY <= 8 + 30 * 2 + 8 })
-        #expect(visibleTags().contains { $0.accessibilityIdentifier == "seek-mail-tag-12" })
-        // 有未读的邮箱排在前面，标签带未读数
-        #expect(title(tagsView.mailTestView(id: "seek-mail-tag-3") as? UIButton) == "box3 (4)")
-        #expect(title(tagsView.mailTestView(id: "seek-mail-tag-all") as? UIButton) == "全部 (4)")
-        // 长按邮箱标签可复制完整地址；「全部」没有菜单
-        #expect((tagsView.mailTestView(id: "seek-mail-tag-3") as? UIButton)?.menu?.title == "box3@seek.li")
-        #expect((tagsView.mailTestView(id: "seek-mail-tag-all") as? UIButton)?.menu == nil)
-
-        // 展开后显示全部，状态记住
-        toggle.sendActions(for: .touchUpInside)
-        inbox.view.layoutIfNeeded()
-        #expect(visibleTags().count == 13)
-        #expect(title(toggle) == "收起")
-        #expect(selection.tagsExpanded)
-
-        // 点标签切换邮箱
-        (tagsView.mailTestView(id: "seek-mail-tag-3") as? UIButton)?.sendActions(for: .touchUpInside)
-        #expect(inbox.model.selectedMailboxID == 3)
+        let tags = try #require(inbox.view.mailTestView(id: "seek-mail-tags"))
+        #expect(tags.isHidden)
+        let switcher = try #require(inbox.view.mailTestView(id: "seek-mail-mailbox-switcher") as? UIButton)
+        #expect(switcher.accessibilityValue == "box12@nodeseek.org")
+        #expect(switcher.frame.height < 100)
+        let copy = try #require(inbox.view.mailTestView(id: "seek-mail-copy-current-address") as? UIButton)
+        #expect(!copy.isHidden)
+        let before = transport.requests.count
+        copy.sendActions(for: .touchUpInside)
+        #expect(UIPasteboard.general.string == "box12@nodeseek.org")
+        #expect(transport.requests.count == before)
+        #expect(!inbox.model.canCompose)
     }
 
     @Test func progressFloatsAboveSearchWithoutTakingListHeight() async throws {

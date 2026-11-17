@@ -20,6 +20,11 @@ final class SeekMailInboxViewController: UIViewController {
 
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let mailboxTags = SeekMailMailboxTagsView()
+    private let mailboxButton = UIButton(type: .system)
+    private let copyMailboxButton = UIButton(type: .system)
+    private let mailboxRow = UIStackView()
+    private var displayedMails: [SeekMail] = []
+    private var displayedRange: String?
     private let folderTabs = SeekMailFolderTabsView()
     private let noticeLabel = UILabel()
     private let noticeBar = UIView()
@@ -279,20 +284,8 @@ final class SeekMailInboxViewController: UIViewController {
         let refresh = UIAction(title: SeekMailL10n.text("刷新"), image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
             self?.model.reload()
         }
-        let storage = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self else { return completion([]) }
-            Task {
-                let item: UIAction
-                if let quota = try? await self.model.provider.quota(), let storage = quota.storage {
-                    let percent = storage.usagePercent ?? Int(Double(storage.used) / Double(max(storage.quota, 1)) * 100)
-                    item = UIAction(title: SeekMailL10n.text("存储用量"), subtitle: "\(SeekMailFormat.bytes(storage.used)) / \(SeekMailFormat.bytes(storage.quota)) · \(percent)%",
-                                    image: UIImage(systemName: "internaldrive")) { _ in }
-                } else {
-                    item = UIAction(title: SeekMailL10n.text("存储用量"), subtitle: SeekMailL10n.text("暂时无法获取"), image: UIImage(systemName: "internaldrive"),
-                                    attributes: .disabled) { _ in }
-                }
-                completion([item])
-            }
+        let storage = UIAction(title: SeekMailL10n.text("查看存储用量"), image: UIImage(systemName: "internaldrive")) { [weak self] _ in
+            self?.showStorage()
         }
         let current = model.selectionStore.autoRefreshSeconds
         let intervals = SeekMailSelectionStore.autoRefreshOptions.map { seconds in
@@ -319,6 +312,27 @@ final class SeekMailInboxViewController: UIViewController {
     // MARK: - 布局
 
     private func setupLayout() {
+        mailboxButton.accessibilityIdentifier = "seek-mail-mailbox-switcher"
+        mailboxButton.contentHorizontalAlignment = .leading
+        mailboxButton.addAction(UIAction { [weak self] _ in self?.presentMailboxPicker() }, for: .touchUpInside)
+        copyMailboxButton.accessibilityIdentifier = "seek-mail-copy-current-address"
+        copyMailboxButton.accessibilityLabel = SeekMailL10n.text("复制地址")
+        copyMailboxButton.tintColor = .label
+        copyMailboxButton.setImage(UIImage(systemName: "doc.on.doc"), for: .normal)
+        copyMailboxButton.addAction(UIAction { [weak self] _ in
+            guard let self, let address = model.selectedMailbox?.address else { return }
+            copyAddress(address)
+        }, for: .touchUpInside)
+        mailboxRow.addArrangedSubview(mailboxButton)
+        mailboxRow.addArrangedSubview(copyMailboxButton)
+        mailboxRow.alignment = .center
+        mailboxRow.isLayoutMarginsRelativeArrangement = true
+        mailboxRow.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 12)
+        NSLayoutConstraint.activate([
+            mailboxButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
+            copyMailboxButton.widthAnchor.constraint(equalToConstant: 44),
+            copyMailboxButton.heightAnchor.constraint(equalToConstant: 44)
+        ])
         folderTabs.translatesAutoresizingMaskIntoConstraints = false
 
         noticeLabel.font = SeekMailFont.of(.footnote)
@@ -346,7 +360,7 @@ final class SeekMailInboxViewController: UIViewController {
         }, for: .valueChanged)
         tableView.refreshControl = refresh
 
-        let stack = UIStackView(arrangedSubviews: [mailboxTags, folderTabs, noticeBar, tableView])
+        let stack = UIStackView(arrangedSubviews: [mailboxRow, mailboxTags, folderTabs, noticeBar, tableView])
         stack.axis = .vertical
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
@@ -414,14 +428,31 @@ final class SeekMailInboxViewController: UIViewController {
     // MARK: - 渲染
 
     private func render() {
-        tableView.refreshControl?.endRefreshing()
+        if !model.isRefreshing { tableView.refreshControl?.endRefreshing() }
+        let range = "\(model.selectedMailboxID.map(String.init) ?? "all")|\(model.scope.storageValue)|\(model.searchText)"
+        let sameRange = displayedRange == range
+        var anchor: (id: Int64, offset: CGFloat)?
+        if sameRange, tableView.contentOffset.y > -tableView.adjustedContentInset.top + 10,
+           let first = tableView.indexPathsForVisibleRows?.first(where: { $0.section == Section.mails.rawValue }),
+           displayedMails.indices.contains(first.row) {
+            anchor = (displayedMails[first.row].id, tableView.contentOffset.y - tableView.rectForRow(at: first).minY)
+        }
         updateTags()
         onNavigationChange?()
         folderTabs.update(scopes: model.scopes, titles: model.scopes.map(model.title(for:)), selected: model.scope)
         searchBar.textField.placeholder = SeekMailL10n.format("搜索 %@ · %@", model.selectionTitle, model.scopeTitle)
         updateNotice()
         updateBackground()
+        displayedMails = model.mails
+        displayedRange = range
         tableView.reloadData()
+        if let anchor, let row = displayedMails.firstIndex(where: { $0.id == anchor.id }) {
+            tableView.layoutIfNeeded()
+            let y = tableView.rectForRow(at: IndexPath(row: row, section: Section.mails.rawValue)).minY + anchor.offset
+            tableView.setContentOffset(CGPoint(x: 0, y: max(-tableView.adjustedContentInset.top, y)), animated: false)
+        } else if !sameRange {
+            tableView.setContentOffset(CGPoint(x: 0, y: -tableView.adjustedContentInset.top), animated: false)
+        }
         if lastDeletedID != nil, model.hasPendingDeletes == false {
             lastDeletedID = nil
             undoToast.dismiss()
@@ -429,9 +460,57 @@ final class SeekMailInboxViewController: UIViewController {
     }
 
     private func updateTags() {
-        mailboxTags.isHidden = model.mailboxes.isEmpty
+        mailboxRow.isHidden = model.mailboxes.isEmpty
+        // 少量邮箱保留直接切换，邮箱多时只占一行，通过面板搜索和复制完整地址。
+        mailboxTags.isHidden = model.mailboxes.isEmpty || model.mailboxes.count > 5
         mailboxTags.update(tags: model.mailboxTags, selectedID: model.selectedMailboxID,
                            expanded: model.selectionStore.tagsExpanded)
+        var configuration = UIButton.Configuration.plain()
+        configuration.baseForegroundColor = .label
+        configuration.contentInsets = .zero
+        configuration.image = UIImage(systemName: "chevron.down")
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 8
+        configuration.titleAlignment = .leading
+        configuration.titleLineBreakMode = .byTruncatingMiddle
+        var title = AttributedString(model.selectionTitle)
+        title.font = SeekMailFont.of(.body, weight: .semibold)
+        configuration.attributedTitle = title
+        let summary = model.selectedMailbox?.address ?? SeekMailL10n.format("%@ 个邮箱", String(model.mailboxes.count))
+        var subtitle = AttributedString(model.canCompose ? summary : summary + " · " + SeekMailL10n.text("仅收信"))
+        subtitle.font = SeekMailFont.of(.footnote)
+        subtitle.foregroundColor = .secondaryLabel
+        configuration.attributedSubtitle = subtitle
+        mailboxButton.configuration = configuration
+        mailboxButton.accessibilityLabel = SeekMailL10n.text("选择邮箱")
+        mailboxButton.accessibilityValue = summary
+        copyMailboxButton.isHidden = model.selectedMailbox == nil
+    }
+
+    private func presentMailboxPicker() {
+        let picker = SeekMailMailboxPickerViewController(model: model) { [weak self] id in self?.model.selectMailbox(id) }
+        let navigation = UINavigationController(rootViewController: picker)
+        if let sheet = navigation.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(navigation, animated: true)
+    }
+
+    private func showStorage() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let quota = try await model.provider.quota()
+                guard let storage = quota.storage, presentedViewController == nil else { return }
+                let percent = storage.usagePercent ?? Int(Double(storage.used) / Double(max(storage.quota, 1)) * 100)
+                let alert = UIAlertController(title: SeekMailL10n.text("存储用量"), message: "\(SeekMailFormat.bytes(storage.used)) / \(SeekMailFormat.bytes(storage.quota)) · \(percent)%", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: SeekMailL10n.text("关闭"), style: .cancel))
+                present(alert, animated: true)
+            } catch {
+                undoToast.showMessage((error as? SeekMailError)?.userMessage ?? SeekMailL10n.text("暂时无法获取"), in: view)
+            }
+        }
     }
 
     private func updateNotice() {
