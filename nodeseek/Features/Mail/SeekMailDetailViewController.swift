@@ -177,6 +177,12 @@ final class SeekMailDetailViewController: UIViewController {
         updateToolbar()
 
         stack.addArrangedSubview(makeHeader(mail))
+        if model.folder(for: mail) != nil || !mail.tags.isEmpty {
+            let classification = SeekMailClassificationLabel()
+            classification.accessibilityIdentifier = "seek-mail-detail-classification"
+            classification.configure(folder: model.folder(for: mail), tags: mail.tags)
+            stack.addArrangedSubview(classification)
+        }
         if SeekMailDetailContent.hasAuthFailure(scoreDetails: mail.scoreDetails) {
             stack.addArrangedSubview(makeNotice(SeekMailL10n.text("发件人未通过验证，请留意邮件里的链接"), symbol: "exclamationmark.shield"))
         }

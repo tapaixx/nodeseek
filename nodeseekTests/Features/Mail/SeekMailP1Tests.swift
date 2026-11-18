@@ -183,17 +183,20 @@ struct SeekMailP1Tests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let mails = try decode([SeekMail].self, #"[{"id":1,"mailboxId":1,"fromAddress":"a@x.com","subject":"s","bodyText":"b","receivedAt":"2026-11-16T03:31:18.123456789Z","verificationCode":"123456"}]"#)
+        let mails = try decode([SeekMail].self, ##"[{"id":1,"mailboxId":1,"fromAddress":"a@x.com","subject":"s","bodyText":"b","receivedAt":"2026-11-16T03:31:18.123456789Z","verificationCode":"123456","tags":[{"id":7,"name":"账单","color":"#E07A20"}]}]"##)
         let boxes = try decode([SeekMailbox].self, #"[{"id":1,"address":"me@seek.li"}]"#)
 
         let cache = SeekMailListCache(directory: directory)
         cache.saveMailboxes(boxes, folders: [], for: "key-a")
         cache.saveMails(mails, for: "key-a", page: "all|inbox")
+        cache.saveTags(mails[0].tags, for: "key-a")
 
         // 新实例从文件读回
         let reloaded = SeekMailListCache(directory: directory)
         #expect(reloaded.mailboxes(for: "key-a")?.mailboxes == boxes)
         #expect(reloaded.mails(for: "key-a", page: "all|inbox") == mails)
+        #expect(reloaded.tags(for: "key-a") == mails[0].tags)
+        #expect(reloaded.tags(for: "key-b") == nil)
         #expect(reloaded.mails(for: "key-b", page: "all|inbox") == nil)
         reloaded.clear()
         #expect(SeekMailListCache(directory: directory).mailboxes(for: "key-a") == nil)

@@ -228,6 +228,10 @@ extension SeekMailProvider where Target == SeekMailAPI {
         try await request(.folders, as: [SeekMailFolder].self)
     }
 
+    func tags() async throws -> [SeekMailTag] {
+        try await request(.tags, as: [SeekMailTag].self)
+    }
+
     func quota() async throws -> SeekMailQuota {
         try await request(.quotas, as: SeekMailQuota.self)
     }

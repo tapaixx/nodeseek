@@ -36,6 +36,7 @@ enum SeekMailAPI {
 
     // 文件夹、存储
     case folders
+    case tags
     case quotas
 
     // 发信
@@ -61,6 +62,7 @@ extension SeekMailAPI: SeekMailTargetType {
         case .attachments(let mailID): return "/mails/\(mailID)/attachments"
         case .downloadAttachment(let mailID, let index): return "/mails/\(mailID)/attachments/\(index)"
         case .folders: return "/folders"
+        case .tags: return "/tags"
         case .quotas: return "/quotas"
         case .send: return "/send"
         }
@@ -83,6 +85,7 @@ extension SeekMailAPI: SeekMailTargetType {
         case .markRead, .markFlagged, .moveMail, .deleteMail: return "mail:manage"
         case .attachments, .downloadAttachment: return "attachment:read"
         case .folders: return "folder:read"
+        case .tags: return "tag:read"
         case .quotas: return "storage:read"
         case .send: return "mail:send"
         }

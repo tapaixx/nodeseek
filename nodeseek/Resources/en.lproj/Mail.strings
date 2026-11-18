@@ -167,3 +167,9 @@
 "没有找到匹配的邮箱" = "No matching mailboxes";
 "%@ 个邮箱" = "%@ mailboxes";
 "仅收信" = "Receive only";
+
+// 邮件分类标志
+"标签" = "Tags";
+"全部标签" = "All tags";
+"标签：%@" = "Tag: %@";
+"文件夹：%@" = "Folder: %@";

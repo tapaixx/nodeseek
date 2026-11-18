@@ -26,6 +26,7 @@ final class SeekMailMemoryCache {
     private var mailboxes: Stamped<(mailboxes: [SeekMailbox], folders: [SeekMailFolder])>?
     private var details: [Int64: Stamped<SeekMailDetail>] = [:]
     private var attachments: [Int64: Stamped<[SeekMailAttachment]>] = [:]
+    private var tagCatalog: Stamped<[SeekMailTag]>?
 
     init(now: @escaping () -> Date = Date.init, notificationCenter: NotificationCenter = .default) {
         self.now = now
@@ -41,6 +42,16 @@ final class SeekMailMemoryCache {
     func saveMailboxes(_ mailboxes: [SeekMailbox], folders: [SeekMailFolder], for key: String) {
         prepare(for: key)
         self.mailboxes = Stamped(value: (mailboxes, folders), savedAt: now())
+    }
+
+    func tags(for key: String) -> [SeekMailTag]? {
+        guard prepare(for: key), let entry = tagCatalog, isFresh(entry.savedAt, lifetime: Self.mailboxLifetime) else { return nil }
+        return entry.value
+    }
+
+    func saveTags(_ tags: [SeekMailTag], for key: String) {
+        prepare(for: key)
+        tagCatalog = Stamped(value: tags, savedAt: now())
     }
 
     func detail(id: Int64, for key: String) -> SeekMailDetail? {
@@ -73,6 +84,7 @@ final class SeekMailMemoryCache {
         mailboxes = nil
         details = [:]
         attachments = [:]
+        tagCatalog = nil
     }
 
     /// 返回缓存是否属于这个 Key；换了 Key 时先清空，再归到新 Key 名下。

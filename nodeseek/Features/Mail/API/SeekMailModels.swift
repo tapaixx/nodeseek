@@ -51,10 +51,11 @@ nonisolated struct SeekMail: Codable, Equatable, Sendable {
     let size: Int64?
     /// JSON 字符串，含 spf/dkim/dmarc 结果。
     let scoreDetails: String?
+    var tags: [SeekMailTag]
 
     private enum CodingKeys: String, CodingKey {
         case id, mailboxId, folderId, fromAddress, fromName, toAddress, cc, subject, bodyText, bodyHtml
-        case verificationCode, isRead, isFlagged, isPinned, hasAttachments, status, receivedAt, size, scoreDetails
+        case verificationCode, isRead, isFlagged, isPinned, hasAttachments, status, receivedAt, size, scoreDetails, tags
     }
 
     init(from decoder: Decoder) throws {
@@ -79,10 +80,11 @@ nonisolated struct SeekMail: Codable, Equatable, Sendable {
         receivedAt = try container.decodeIfPresent(Date.self, forKey: .receivedAt)
         size = try container.decodeIfPresent(Int64.self, forKey: .size)
         scoreDetails = try container.decodeIfPresent(String.self, forKey: .scoreDetails)
+        tags = try container.decodeIfPresent([SeekMailTag].self, forKey: .tags) ?? []
     }
 }
 
-nonisolated struct SeekMailTag: Decodable, Equatable, Sendable {
+nonisolated struct SeekMailTag: Codable, Equatable, Sendable {
     let id: Int64
     let name: String
     let color: String?
@@ -98,7 +100,8 @@ nonisolated struct SeekMailDetail: Decodable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mail = try container.decode(SeekMail.self, forKey: .mail)
-        tags = try container.decodeIfPresent([SeekMailTag].self, forKey: .tags) ?? []
+        tags = try container.decodeIfPresent([SeekMailTag].self, forKey: .tags) ?? mail.tags
+        mail.tags = tags
     }
 }
 

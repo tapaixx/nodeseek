@@ -225,6 +225,8 @@ final class SeekMailRouteTransport {
     /// 不为 nil 时所有请求都返回这段内容。
     var override: String?
     var mailboxes = #"{"data":[{"id":1,"address":"alpha@seek.li"},{"id":2,"address":"beta@seek.li","alias":"账单"}]}"#
+    var folders = #"{"data":null}"#
+    var tags = #"{"data":null}"#
     var mailPages: [String] = [
         #"{"data":[{"id":11,"mailboxId":1,"fromAddress":"noreply@example.com","subject":"Hi","bodyText":"a","isRead":false},{"id":12,"mailboxId":2,"fromAddress":"bill@example.com","subject":"Bill","bodyText":"b","isRead":true}],"pagination":{"total":2,"limit":20,"offset":0}}"#
     ]
@@ -251,7 +253,9 @@ final class SeekMailRouteTransport {
         } else if path.hasSuffix("/mailboxes") {
             body = mailboxes
         } else if path.hasSuffix("/folders") {
-            body = #"{"data":null}"#
+            body = folders
+        } else if path.hasSuffix("/tags") {
+            body = tags
         } else if let detail = details[path] {
             body = detail
         } else if path.hasSuffix("/mails") {

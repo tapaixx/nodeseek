@@ -116,6 +116,9 @@ final class SeekMailInboxModel {
     private(set) var names: [Int64: SeekMailboxDisplay] = [:]
     private(set) var folders: [SeekMailFolder] = []
     private(set) var selectedMailboxID: Int64?
+    private(set) var selectedTag: SeekMailTag?
+    private var tagCatalog: [SeekMailTag] = []
+    private var tagTask: Task<Void, Never>?
     private(set) var scope: SeekMailFolderScope = .inbox
     private(set) var searchText = ""
     private(set) var phase: Phase = .loading
@@ -160,6 +163,7 @@ final class SeekMailInboxModel {
 
     deinit {
         loadTask?.cancel()
+        tagTask?.cancel()
     }
 
     // MARK: - 派生数据
@@ -204,6 +208,15 @@ final class SeekMailInboxModel {
         [.inbox, .spam, .trash] + folders.map { .custom($0.id) }
     }
 
+    var availableTags: [SeekMailTag] {
+        var seen = Set<Int64>()
+        return (tagCatalog + mails.flatMap(\.tags)).filter { seen.insert($0.id).inserted }
+    }
+
+    func folder(for mail: SeekMail) -> SeekMailFolder? {
+        mail.folderId.flatMap { id in folders.first { $0.id == id } }
+    }
+
     /// 当前范围内 15 分钟内最新的一封带验证码的邮件；搜索时不显示。
     func latestCodeMail(now: Date = Date()) -> SeekMail? {
         guard isSearching == false, isTrash == false else { return nil }
@@ -227,6 +240,7 @@ final class SeekMailInboxModel {
         isRefreshing = true
         isLoadingMore = false
         restoreSnapshot()
+        loadTags()
         onChange?()
         refreshUnreadCounts()
         generation += 1
@@ -330,6 +344,33 @@ final class SeekMailInboxModel {
         resetAndReload()
     }
 
+    func selectTag(_ tag: SeekMailTag?) {
+        guard tag?.id != selectedTag?.id else { return }
+        selectedTag = tag
+        resetAndReload()
+    }
+
+    private func loadTags() {
+        let key = cacheKey()
+        if let key, let cached = memoryCache?.tags(for: key) {
+            tagCatalog = cached
+            return
+        }
+        if let key, let saved = cache?.tags(for: key) { tagCatalog = saved }
+        tagTask?.cancel()
+        tagTask = Task { [weak self] in
+            guard let self else { return }
+            // 标签权限可选；失败不阻止收件，邮件自身返回的标签仍然展示。
+            guard let tags = try? await provider.tags(), !Task.isCancelled, cacheKey() == key else { return }
+            tagCatalog = tags
+            if let key {
+                memoryCache?.saveTags(tags, for: key)
+                cache?.saveTags(tags, for: key)
+            }
+            onChange?()
+        }
+    }
+
     private func resetAndReload() {
         commitPendingDeletes()
         allMails = []
@@ -344,7 +385,7 @@ final class SeekMailInboxModel {
     }
 
     private var currentPageKey: String {
-        SeekMailListCache.pageKey(mailboxID: selectedMailboxID, scope: scope)
+        SeekMailListCache.pageKey(mailboxID: selectedMailboxID, scope: scope) + (selectedTag.map { "|tag:\($0.id)" } ?? "")
     }
 
     /// 先显示上次的邮箱和第一页，网络回来后再替换。
@@ -404,6 +445,7 @@ final class SeekMailInboxModel {
         var query = SeekMailListQuery(mailboxID: selectedMailboxID, limit: Self.pageSize, offset: offset)
         scope.apply(to: &query)
         query.search = isSearching ? searchText : nil
+        query.tagID = selectedTag?.id
         return query
     }
 
@@ -462,11 +504,19 @@ final class SeekMailInboxModel {
                 cached.mail.isRead = current.isRead
                 cached.mail.isFlagged = current.isFlagged
             }
+            applyDetailTags(cached.tags, id: id)
             return cached
         }
         let detail = try await provider.mail(id: id)
+        applyDetailTags(detail.tags, id: id)
         if let key { memoryCache?.saveDetail(detail, for: key) }
         return detail
+    }
+
+    private func applyDetailTags(_ tags: [SeekMailTag], id: Int64) {
+        guard let index = allMails.firstIndex(where: { $0.id == id }), allMails[index].tags != tags else { return }
+        allMails[index].tags = tags
+        onChange?()
     }
 
     func loadAttachments(mailID: Int64) async throws -> [SeekMailAttachment] {

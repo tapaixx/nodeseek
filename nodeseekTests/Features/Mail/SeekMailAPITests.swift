@@ -101,6 +101,25 @@ struct SeekMailAPITests {
         #expect(detail.tags.isEmpty)
     }
 
+    @Test func decodesListTagsAndDetailTagsWithoutLosingMetadata() async throws {
+        let tag = SeekMailTag(id: 7, name: "账单", color: "#E07A20")
+        let stub = TransportStub(body: ##"{"data":[{"id":1,"mailboxId":1,"folderId":9,"tags":[{"id":7,"name":"账单","color":"#E07A20"}]}]}"##)
+        let provider = makeProvider(stub)
+        let list = try await provider.mails(SeekMailListQuery())
+        #expect(list.mails.first?.tags == [tag])
+        #expect(list.mails.first?.folderId == 9)
+        stub.body = Data(##"{"data":{"mail":{"id":1,"mailboxId":1},"tags":[{"id":7,"name":"账单","color":"#E07A20"}]}}"##.utf8)
+        let detail = try await provider.mail(id: 1)
+        #expect(detail.tags == [tag])
+        #expect(detail.mail.tags == [tag])
+        stub.body = Data(##"{"data":{"mail":{"id":1,"mailboxId":1,"tags":[{"id":7,"name":"账单","color":"#E07A20"}]}}}"##.utf8)
+        #expect(try await provider.mail(id: 1).tags == [tag])
+        stub.body = Data(##"{"data":[{"id":7,"name":"账单","color":"#E07A20"}]}"##.utf8)
+        #expect(try await provider.tags() == [tag])
+        #expect(stub.request?.url?.path == "/openapi/v1/tags")
+        #expect(SeekMailAPI.tags.requiredScope == "tag:read")
+    }
+
     @Test func decodesUnreadPageWithCode() async throws {
         let stub = TransportStub(body: """
         {"data":[{"id":505995,"mailboxId":43656,"mailboxAddress":"me@nodeseek.org","fromAddress":"test@seek.li",

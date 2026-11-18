@@ -13,6 +13,7 @@ final class SeekMailListCache {
         var keyFingerprint: String
         var mailboxes: [SeekMailbox]
         var folders: [SeekMailFolder]
+        var tags: [SeekMailTag]? = nil
         /// 键是「邮箱 + 文件夹」，例如 "all|inbox"、"12|folder:3"。
         var pages: [String: [SeekMail]]
     }
@@ -44,6 +45,14 @@ final class SeekMailListCache {
 
     func mails(for key: String, page: String) -> [SeekMail]? {
         load(for: key)?.pages[page]
+    }
+
+    func tags(for key: String) -> [SeekMailTag]? { load(for: key)?.tags }
+
+    func saveTags(_ tags: [SeekMailTag], for key: String) {
+        var snapshot = load(for: key) ?? Snapshot(keyFingerprint: Self.fingerprint(of: key), mailboxes: [], folders: [], pages: [:])
+        snapshot.tags = tags
+        write(snapshot)
     }
 
     func saveMailboxes(_ mailboxes: [SeekMailbox], folders: [SeekMailFolder], for key: String) {

@@ -66,6 +66,58 @@ struct SeekMailInboxModelTests {
 
     // MARK: - 加载
 
+    @Test func tagFilterCombinesWithMailboxFolderAndSearch() async throws {
+        let transport = SeekMailRouteTransport()
+        transport.folders = ##"{"data":[{"id":9,"name":"服务","color":"#4080FF","sortOrder":0}]}"##
+        transport.tags = ##"{"data":[{"id":7,"name":"账单","color":"#E07A20"}]}"##
+        let model = makeModel(transport)
+        model.start()
+        await mailWaitUntil { !model.isRefreshing && !model.availableTags.isEmpty }
+        model.selectMailbox(2)
+        model.selectScope(.custom(9))
+        model.setSearchText("invoice")
+        model.selectTag(try #require(model.availableTags.first))
+        await mailWaitUntil { !model.isRefreshing }
+        let request = try #require(transport.requests.last { $0.url?.path.hasSuffix("/mails") == true })
+        #expect(request.url?.query == "folder_id=9&limit=20&mailbox_id=2&offset=0&search=invoice&tag_id=7")
+        model.selectTag(nil)
+        await mailWaitUntil { !model.isRefreshing }
+        #expect(transport.requests.last { $0.url?.path.hasSuffix("/mails") == true }?.url?.query?.contains("tag_id") == false)
+    }
+
+    @Test func optionalTagCatalogFailureDoesNotBlockInboxOrEmbeddedTags() async throws {
+        let transport = SeekMailRouteTransport()
+        transport.mailPages = [#"{"data":[{"id":1,"mailboxId":1,"tags":[{"id":7,"name":"账单","color":"invalid"}]}]}"#]
+        let provider = SeekMailProvider<SeekMailAPI>(apiKey: { "sk_live_test" }, plugins: [], transport: { request in
+            if request.url?.path.hasSuffix("/tags") == true {
+                return (Data(#"{"error":"权限不足"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!)
+            }
+            return try await transport.load(request)
+        })
+        let model = SeekMailInboxModel(provider: provider, selectionStore: makeSelectionStore())
+        model.start()
+        await mailWaitUntil { !model.isRefreshing }
+        #expect(model.phase == .loaded)
+        #expect(model.availableTags.map(\.name) == ["账单"])
+    }
+
+    @Test func cachedDetailRestoresTagsWithoutAnExtraDetailRequest() async throws {
+        let transport = SeekMailRouteTransport()
+        transport.details["/openapi/v1/mails/11"] = #"{"data":{"mail":{"id":11,"mailboxId":1},"tags":[{"id":7,"name":"账单"}]}}"#
+        let provider = SeekMailProvider<SeekMailAPI>(apiKey: { "sk_live_test" }, plugins: [], transport: transport.load)
+        let model = SeekMailInboxModel(provider: provider, selectionStore: makeSelectionStore(), cacheKey: { "sk_live_test" }, memoryCache: SeekMailMemoryCache())
+        model.start()
+        await mailWaitUntil { !model.isRefreshing }
+        _ = try await model.loadDetail(id: 11)
+        #expect(model.mail(id: 11)?.tags.map(\.name) == ["账单"])
+        model.reload()
+        await mailWaitUntil { !model.isRefreshing }
+        #expect(model.mail(id: 11)?.tags.isEmpty == true)
+        _ = try await model.loadDetail(id: 11)
+        #expect(model.mail(id: 11)?.tags.map(\.name) == ["账单"])
+        #expect(transport.requests.filter { $0.url?.path == "/openapi/v1/mails/11" }.count == 1)
+    }
+
     @Test func loadsFirstPageWithRememberedFolderAndPaginates() async throws {
         let transport = SeekMailRouteTransport()
         transport.mailPages = [

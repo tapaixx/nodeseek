@@ -111,6 +111,7 @@ final class SeekMailCell: UITableViewCell {
     private let timeLabel = UILabel()
     private let subjectLabel = UILabel()
     private let previewLabel = UILabel()
+    private let classificationLabel = SeekMailClassificationLabel()
     private let codeButton = UIButton(type: .system)
     private var code: String?
 
@@ -156,7 +157,8 @@ final class SeekMailCell: UITableViewCell {
         let topRow = UIStackView(arrangedSubviews: [senderLabel, flagView, attachmentView, timeLabel])
         topRow.spacing = 6
         topRow.alignment = .firstBaseline
-        let textStack = UIStackView(arrangedSubviews: [topRow, subjectLabel, previewLabel])
+        classificationLabel.accessibilityIdentifier = "seek-mail-row-classification"
+        let textStack = UIStackView(arrangedSubviews: [topRow, subjectLabel, classificationLabel, previewLabel])
         textStack.axis = .vertical
         textStack.spacing = 2
         let row = UIStackView(arrangedSubviews: [textStack, codeButton])
@@ -178,7 +180,8 @@ final class SeekMailCell: UITableViewCell {
         separatorInset = UIEdgeInsets(top: 0, left: 24, bottom: 0, right: 0)
     }
 
-    func configure(mail: SeekMail, recipient: SeekMailboxDisplay?, keyword: String) {
+    func configure(mail: SeekMail, recipient: SeekMailboxDisplay?, keyword: String, folder: SeekMailFolder? = nil) {
+        classificationLabel.configure(folder: folder, tags: mail.tags)
         unreadDot.isHidden = mail.isRead
         let sender = mail.fromName ?? mail.fromAddress
         senderLabel.font = SeekMailFont.of(.body).withWeight(mail.isRead ? .regular : .semibold)
@@ -210,6 +213,7 @@ final class SeekMailCell: UITableViewCell {
         var parts = [mail.isRead ? nil : SeekMailL10n.text("未读"), sender, subject, mail.isFlagged ? SeekMailL10n.text("已加星标") : nil,
                      mail.hasAttachments ? SeekMailL10n.text("有附件") : nil, timeLabel.text]
         if let code { parts.append(SeekMailL10n.format("验证码 %@", code)) }
+        if !classificationLabel.isHidden { parts.append(classificationLabel.accessibilityLabel) }
         accessibilityLabel = parts.compactMap { $0 }.joined(separator: "，")
     }
 }

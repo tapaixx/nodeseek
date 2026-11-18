@@ -26,6 +26,7 @@ final class SeekMailInboxViewController: UIViewController {
     private var displayedMails: [SeekMail] = []
     private var displayedRange: String?
     private let folderTabs = SeekMailFolderTabsView()
+    private let classificationButton = UIButton(type: .system)
     private let noticeLabel = UILabel()
     private let noticeBar = UIView()
     private let undoToast = SeekMailUndoToast()
@@ -334,6 +335,12 @@ final class SeekMailInboxViewController: UIViewController {
             copyMailboxButton.heightAnchor.constraint(equalToConstant: 44)
         ])
         folderTabs.translatesAutoresizingMaskIntoConstraints = false
+        classificationButton.accessibilityIdentifier = "seek-mail-classification-filter"
+        classificationButton.showsMenuAsPrimaryAction = true
+        classificationButton.contentHorizontalAlignment = .leading
+        let classificationHeight = classificationButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        classificationHeight.priority = .defaultHigh
+        classificationHeight.isActive = true
 
         noticeLabel.font = SeekMailFont.of(.footnote)
         noticeLabel.textColor = .secondaryLabel
@@ -360,7 +367,7 @@ final class SeekMailInboxViewController: UIViewController {
         }, for: .valueChanged)
         tableView.refreshControl = refresh
 
-        let stack = UIStackView(arrangedSubviews: [mailboxRow, mailboxTags, folderTabs, noticeBar, tableView])
+        let stack = UIStackView(arrangedSubviews: [mailboxRow, mailboxTags, folderTabs, classificationButton, noticeBar, tableView])
         stack.axis = .vertical
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
@@ -429,7 +436,7 @@ final class SeekMailInboxViewController: UIViewController {
 
     private func render() {
         if !model.isRefreshing { tableView.refreshControl?.endRefreshing() }
-        let range = "\(model.selectedMailboxID.map(String.init) ?? "all")|\(model.scope.storageValue)|\(model.searchText)"
+        let range = "\(model.selectedMailboxID.map(String.init) ?? "all")|\(model.scope.storageValue)|\(model.searchText)|\(model.selectedTag?.id.description ?? "all")"
         let sameRange = displayedRange == range
         var anchor: (id: Int64, offset: CGFloat)?
         if sameRange, tableView.contentOffset.y > -tableView.adjustedContentInset.top + 10,
@@ -440,6 +447,7 @@ final class SeekMailInboxViewController: UIViewController {
         updateTags()
         onNavigationChange?()
         folderTabs.update(scopes: model.scopes, titles: model.scopes.map(model.title(for:)), selected: model.scope)
+        updateClassificationFilter()
         searchBar.textField.placeholder = SeekMailL10n.format("搜索 %@ · %@", model.selectionTitle, model.scopeTitle)
         updateNotice()
         updateBackground()
@@ -485,6 +493,33 @@ final class SeekMailInboxViewController: UIViewController {
         mailboxButton.accessibilityLabel = SeekMailL10n.text("选择邮箱")
         mailboxButton.accessibilityValue = summary
         copyMailboxButton.isHidden = model.selectedMailbox == nil
+    }
+
+    private func updateClassificationFilter() {
+        classificationButton.isHidden = model.availableTags.isEmpty && model.selectedTag == nil && model.folders.isEmpty
+        var configuration = UIButton.Configuration.plain()
+        configuration.baseForegroundColor = .label
+        configuration.image = UIImage(systemName: "line.3.horizontal.decrease.circle")
+        configuration.imagePadding = 6
+        var text = AttributedString(SeekMailL10n.format("标签：%@", model.selectedTag?.name ?? SeekMailL10n.text("全部标签")))
+        text.font = SeekMailFont.of(.footnote)
+        configuration.attributedTitle = text
+        configuration.titleLineBreakMode = .byWordWrapping
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+        classificationButton.configuration = configuration
+        let folders = model.scopes.map { scope in
+            UIAction(title: model.title(for: scope), image: UIImage(systemName: "folder"), state: model.scope == scope ? .on : .off) { [weak self] _ in
+                self?.model.selectScope(scope)
+            }
+        }
+        var tags = [UIAction(title: SeekMailL10n.text("全部标签"), state: model.selectedTag == nil ? .on : .off) { [weak self] _ in self?.model.selectTag(nil) }]
+        tags += model.availableTags.map { tag in
+            UIAction(title: tag.name, image: UIImage(systemName: "tag"), state: model.selectedTag?.id == tag.id ? .on : .off) { [weak self] _ in self?.model.selectTag(tag) }
+        }
+        classificationButton.menu = UIMenu(children: [
+            UIMenu(title: SeekMailL10n.text("文件夹"), children: folders),
+            UIMenu(title: SeekMailL10n.text("标签"), options: .displayInline, children: tags)
+        ])
     }
 
     private func presentMailboxPicker() {
@@ -665,7 +700,7 @@ extension SeekMailInboxViewController: UITableViewDataSource, UITableViewDelegat
         let cell = tableView.dequeueReusableCell(withIdentifier: SeekMailCell.reuseIdentifier, for: indexPath) as! SeekMailCell
         cell.configure(mail: mail,
                        recipient: model.showsRecipientMailbox ? model.names[mail.mailboxId] : nil,
-                       keyword: model.isSearching ? model.searchText : "")
+                       keyword: model.isSearching ? model.searchText : "", folder: model.folder(for: mail))
         cell.accessibilityIdentifier = "seek-mail-row-\(mail.id)"
         return cell
     }
