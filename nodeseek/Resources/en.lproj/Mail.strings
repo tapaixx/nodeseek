@@ -173,3 +173,9 @@
 "全部标签" = "All tags";
 "标签：%@" = "Tag: %@";
 "文件夹：%@" = "Folder: %@";
+"邮箱设置" = "Mail Settings";
+"显示与刷新" = "Display & Refresh";
+"多 Tab 模式未读角标" = "Unread Badge on Mail Tab";
+"关闭后只隐藏底部栏邮箱 Tab 的数字，邮箱内的未读标记不受影响。" = "Turning this off only hides the number on the Mail tab. Unread markers inside Mail are not affected.";
+"邮箱与存储" = "Mailboxes & Storage";
+"暂时无法获取，点按重试" = "Unavailable. Tap to retry.";

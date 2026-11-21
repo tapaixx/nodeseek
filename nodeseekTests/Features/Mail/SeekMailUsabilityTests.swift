@@ -39,21 +39,13 @@ final class SeekMailUsabilityTests: XCTestCase {
         XCTAssertEqual(transport.requests.count, before)
     }
 
-    func testMenuDoesNotRequestQuotaUntilStorageIsSelected() async throws {
+    func testInboxDoesNotRequestQuotaBeforeOpeningSettings() async throws {
         let transport = fixture()
-        transport.details["/openapi/v1/quotas"] = #"{"data":{"storage":{"used":1024,"quota":100000,"usagePercent":1}}}"#
         let inbox = makeInbox(transport)
         let window = try makeWindow(inbox)
         defer { window.isHidden = true }
         await mailWaitUntil { !inbox.model.isRefreshing }
-        let items = inbox.menuElements()
-        XCTAssertFalse(items.contains { $0 is UIDeferredMenuElement })
         XCTAssertFalse(transport.requests.contains { $0.url?.path.hasSuffix("/quotas") == true })
-        let storage = try XCTUnwrap(items.compactMap { $0 as? UIAction }.first { $0.title == SeekMailL10n.text("查看存储用量") })
-        if #available(iOS 16.0, *) { storage.performWithSender(nil, target: nil) }
-        await mailWaitUntil { transport.requests.contains { $0.url?.path.hasSuffix("/quotas") == true } }
-        XCTAssertTrue(transport.requests.contains { $0.url?.path.hasSuffix("/quotas") == true })
-        inbox.presentedViewController?.dismiss(animated: false)
     }
 
     func testRefreshKeepsVisibleMailAndLoadedPages() async throws {

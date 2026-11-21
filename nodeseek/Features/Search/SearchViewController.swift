@@ -35,6 +35,7 @@ final class SearchViewController: UIViewController {
     private var loadedIDs: Set<String> = []
     private var nextPage = 2
     private var hasMorePages = true
+    private var requestGeneration = 0
     private var isLoadingFirstPage = false
     private var isRefreshing = false
     private var isLoadingMore = false
@@ -616,7 +617,15 @@ final class SearchViewController: UIViewController {
     @objc private func scopeControlChanged() {
         let index = scopeControl.selectedSegmentIndex
         guard SearchScope.allCases.indices.contains(index) else { return }
+        let previousScope = selectedScope
         applyScope(SearchScope.allCases[index])
+
+        guard previousScope == .post, selectedScope == .user,
+              keywordTextField.markedTextRange == nil,
+              let query = activeRequest?.query,
+              keywordTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines) == query,
+              activeUserQuery != query else { return }
+        submitSearch()
     }
 
     @objc private func keywordTextChanged() {
@@ -632,6 +641,7 @@ final class SearchViewController: UIViewController {
         case .post:
             guard activeRequest != nil else { return }
             loadTask?.cancel()
+            requestGeneration += 1
             activeRequest = nil
             items = []
             loadedIDs = []
@@ -642,6 +652,7 @@ final class SearchViewController: UIViewController {
                 listView.hideRefreshing()
             }
             listView.setItems([])
+            listView.searchHighlightTerms = []
             listView.hideLoadingSkeleton()
             listView.hideFirstPageError()
             listView.hideLoadingMore()
@@ -728,6 +739,7 @@ final class SearchViewController: UIViewController {
     }
 
     private func startFirstPageLoad(request: SearchRequest) {
+        requestGeneration += 1
         loadTask?.cancel()
         activeRequest = request
         items = []
@@ -738,6 +750,8 @@ final class SearchViewController: UIViewController {
         isRefreshing = false
         isLoadingMore = false
         listView.setItems([])
+        // 先清空旧结果再换词，旧结果不会按新词整批重排
+        listView.searchHighlightTerms = SearchKeywordHighlighter.terms(from: request.query)
         listView.hideFirstPageError()
         listView.hideLoadingMore()
         listView.showLoadingSkeleton()
@@ -747,7 +761,8 @@ final class SearchViewController: UIViewController {
     private func reloadFirstPageForActiveRequest(isRefresh: Bool) {
         guard let request = activeRequest else { return }
         guard !isLoadingFirstPage else { return }
-        guard !isLoadingMore else { return }
+        guard !isLoadingMore, !isRefreshing else { return }
+        requestGeneration += 1
         loadTask?.cancel()
         if isRefresh {
             isRefreshing = true
@@ -765,6 +780,7 @@ final class SearchViewController: UIViewController {
     }
 
     private func loadMoreIfNeeded(currentIndex: Int, totalCount: Int) {
+        guard !isRefreshing else { return }
         guard totalCount > 0 else { return }
         guard hasMorePages else { return }
         guard !isLoadingMore else { return }
@@ -778,11 +794,13 @@ final class SearchViewController: UIViewController {
     }
 
     private func load(page: Int, request: SearchRequest, isLoadMore: Bool, isRefresh: Bool) {
+        let generation = requestGeneration
         loadTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let searchPage = try await self.loadPosts(page: page, request: request)
                 await MainActor.run {
+                    guard generation == self.requestGeneration else { return }
                     self.handleLoadedPosts(searchPage, page: page, request: request, isLoadMore: isLoadMore, isRefresh: isRefresh)
                 }
             } catch is CancellationError {
@@ -790,6 +808,7 @@ final class SearchViewController: UIViewController {
                 return
             } catch {
                 await MainActor.run {
+                    guard generation == self.requestGeneration else { return }
                     self.handleLoadFailure(error.localizedDescription, request: request, isLoadMore: isLoadMore, isRefresh: isRefresh)
                 }
             }

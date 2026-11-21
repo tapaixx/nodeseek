@@ -5,6 +5,18 @@ import Testing
 /// 地址都是假值。
 @MainActor
 struct SeekMailInboxModelTests {
+    @Test func identicalUnreadSnapshotDoesNotRenderAgain() {
+        let model = makeModel(SeekMailRouteTransport())
+        var updates = 0
+        model.onChange = { updates += 1 }
+        let counts = SeekMailUnreadCounts(byMailbox: [1: 3], total: 3)
+        model.applyUnreadCounts(counts)
+        model.applyUnreadCounts(counts)
+        #expect(updates == 1)
+        model.applyUnreadCounts(SeekMailUnreadCounts(byMailbox: [1: 2], total: 2))
+        #expect(updates == 2)
+    }
+
     // MARK: - 显示名
 
     @Test func displayNamesUseLocalPartUnlessAliasOrCollision() throws {
@@ -21,6 +33,27 @@ struct SeekMailInboxModelTests {
         #expect(names[5]?.title == "ME@example.com")
         #expect(names[3] == SeekMailboxDisplay(title: "github-alt", domainSuffix: "@seek.li", address: "github-alt@seek.li", hasAlias: false))
         #expect(names[4] == SeekMailboxDisplay(title: "VMISS 账单", domainSuffix: nil, address: "billing@seek.li", hasAlias: true))
+    }
+
+    @Test func duplicateMailboxIDsKeepFirstRecordAndProduceOneRow() throws {
+        let mailboxes = try decodeMailboxes(#"""
+        [{"id":1,"address":"first@seek.li"},
+         {"id":1,"address":"conflicting@seek.li","isPinned":true},
+         {"id":2,"address":"second@seek.li"},
+         {"id":2,"address":"second@seek.li"}]
+        """#)
+        let names = SeekMailboxNaming.displays(for: mailboxes)
+        #expect(names[1]?.title == "first")
+        #expect(names[2]?.title == "second")
+        for query in ["", "seek.li"] {
+            let sections = SeekMailboxPickerSections.make(
+                mailboxes: mailboxes, names: names, counts: [1: 2], recentIDs: [1], query: query
+            )
+            #expect(sections.pinned.isEmpty)
+            #expect(sections.unread.map(\.mailboxID) == [1])
+            #expect(sections.others.map(\.mailboxID) == [2])
+            #expect(sections.recents.map(\.mailboxID) == (query.isEmpty ? [1] : []))
+        }
     }
 
     @Test func pickerGroupsPinnedThenUnreadThenOthers() throws {

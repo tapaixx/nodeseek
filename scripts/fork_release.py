@@ -51,6 +51,7 @@ def write_metadata(path, version):
     with path.open("rb") as source:
         info = plistlib.load(source)
     info["Build Release Version"] = version
+    info["FirebaseCrashlyticsCollectionEnabled"] = False
     metadata = {
         "Build Git SHA": os.environ.get("GITHUB_SHA"),
         "Build Workflow": os.environ.get("GITHUB_WORKFLOW"),

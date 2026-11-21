@@ -26,6 +26,16 @@ final class PostTextureListView: UIView {
     var onScroll: ((UIScrollView) -> Void)?
 
     var keyboardDismissBackgrounds: [UIView] { [self, tableView, errorStackView] }
+    /// 搜索页设置后，标题里命中的关键词会高亮；首页不设置，保持为空。
+    var searchHighlightTerms: [String] = [] {
+        didSet {
+            guard searchHighlightTerms != oldValue else { return }
+            // 关键词属于排版条件，变了就重新排版；新结果到达前先换词也不会用到旧缓存
+            guard displayMode == .content, !items.isEmpty else { return }
+            resetLayoutCache()
+            reloadTable()
+        }
+    }
 
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let refreshControl = UIRefreshControl()
@@ -135,13 +145,15 @@ final class PostTextureListView: UIView {
         }
 
         if let appendIndexPaths = makeAppendIndexPaths(from: self.items, to: items) {
-            self.items = items
+            // 先完成上次 reload 的布局，批量插入开始前数据源仍须保持旧行数。
+            tableView.layoutIfNeeded()
             let appendedItems = Array(items[appendIndexPaths[0].row...])
             prefetchLayouts(for: appendedItems)
             prefetchAvatars(for: appendedItems)
             // 分页追加发生在滚动底部，关闭 row 插入动画可以避免调整 contentOffset 时牵动上方内容。
             UIView.performWithoutAnimation {
                 tableView.performBatchUpdates {
+                    self.items = items
                     tableView.insertRows(at: appendIndexPaths, with: .none)
                 }
             }
@@ -162,7 +174,7 @@ final class PostTextureListView: UIView {
         items[index] = PostListItem(post: existing.post, isVisited: isVisited)
         let indexPath = IndexPath(row: index, section: 0)
         if let cell = tableView.cellForRow(at: indexPath) as? PostSummaryCell {
-            cell.configure(with: items[index], layout: layout(for: items[index]))
+            cell.configure(with: items[index], layout: layout(for: items[index]), searchHighlightTerms: searchHighlightTerms)
         }
     }
 
@@ -393,7 +405,11 @@ final class PostTextureListView: UIView {
     private func currentLayoutContext() -> PostSummaryLayout.Context? {
         let width = currentLayoutWidth()
         guard width > 0 else { return nil }
-        return .current(width: width, traitCollection: tableView.traitCollection)
+        return .current(
+            width: width,
+            traitCollection: tableView.traitCollection,
+            searchHighlightTerms: searchHighlightTerms
+        )
     }
 
     /// 取某行排版：缓存命中直接用，否则在主线程同步补算（后台还没算到这一行时）。
@@ -464,7 +480,7 @@ extension PostTextureListView: UITableViewDataSource {
                 for: indexPath
             )
             let item = items[indexPath.row]
-            (cell as? PostSummaryCell)?.configure(with: item, layout: layout(for: item))
+            (cell as? PostSummaryCell)?.configure(with: item, layout: layout(for: item), searchHighlightTerms: searchHighlightTerms)
             return cell
         case .skeleton, .firstPageError:
             return tableView.dequeueReusableCell(

@@ -3,6 +3,7 @@ require "fileutils"
 require "json"
 require "shellwords"
 require "time"
+require "tmpdir"
 
 default_platform(:ios)
 
@@ -68,7 +69,15 @@ def write_build_metadata(options)
   version = options[:version]
   build_number = options[:build_number]
 
-  increment_version_number(version_number: version, xcodeproj: PROJECT) if version && !version.empty?
+  if version && !version.empty?
+    UI.user_error!("Invalid release version: #{version}") unless version.match?(/\A\d+(?:\.\d+){1,2}\z/)
+    # agvtool 只修改 plist；工程的 MARKETING_VERSION 会在构建时覆盖它。
+    project_file = File.join(PROJECT, "project.pbxproj")
+    project_text = File.read(project_file)
+    UI.user_error!("MARKETING_VERSION is missing") unless project_text.include?("MARKETING_VERSION =")
+    File.write(project_file, project_text.gsub(/MARKETING_VERSION = [^;]+;/, "MARKETING_VERSION = #{version};"))
+    increment_version_number(version_number: version, xcodeproj: PROJECT)
+  end
   increment_build_number(build_number: build_number, xcodeproj: PROJECT) if build_number && !build_number.empty?
 
   run_id = ci_value("GITHUB_RUN_ID")
@@ -200,10 +209,19 @@ def app_privacy_auth_options
   username = ENV["APPLE_ID"] if username.nil? || username.empty?
   UI.user_error!("Missing App Store Connect login for App Privacy upload. Set FASTLANE_USER or APPLE_ID.") if username.nil? || username.empty?
 
+  # 与 asc 共用一份申报，避免旧的本地“不收集数据”配置覆盖线上声明。
+  declaration = JSON.parse(File.read(File.join(ROOT, "fastlane/app-privacy.json")))
+  privacy_path = File.join(BUILD_DIR, "app_privacy_details.json")
+  FileUtils.mkdir_p(BUILD_DIR)
+  details = declaration.fetch("dataUsages").map do |usage|
+    { category: usage.fetch("category"), purposes: usage.fetch("purposes"), data_protections: usage.fetch("dataProtections") }
+  end
+  File.write(privacy_path, JSON.pretty_generate(details))
+
   options = {
     username: username,
     app_identifier: APP_IDENTIFIER,
-    json_path: File.join(ROOT, "fastlane/app_privacy_details.json"),
+    json_path: privacy_path,
     skip_publish: env_bool("APP_PRIVACY_SKIP_PUBLISH", default: false)
   }
 
@@ -212,6 +230,20 @@ def app_privacy_auth_options
   options[:team_id] = team_id if team_id && !team_id.empty?
 
   options
+end
+
+# 上传前检查最终 IPA，避免版本参数与实际产物不一致。
+def verify_ipa_version(expected)
+  return if expected.nil? || expected.empty?
+
+  ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
+  Dir.mktmpdir("nodeseek-version") do |directory|
+    sh("unzip -q #{Shellwords.escape(ipa_path)} 'Payload/*.app/Info.plist' -d #{Shellwords.escape(directory)}")
+    plist = Dir.glob(File.join(directory, "Payload", "*.app", "Info.plist")).first
+    UI.user_error!("IPA Info.plist is missing") unless plist
+    actual = sh("/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' #{Shellwords.escape(plist)}", log: false).strip
+    UI.user_error!("IPA version #{actual} does not match requested #{expected}") unless actual == expected
+  end
 end
 
 def write_build_provenance
@@ -308,6 +340,7 @@ platform :ios do
       output_directory: BUILD_DIR,
       output_name: "nodeseek.ipa",
       include_symbols: true,
+      cloned_source_packages_path: File.join(ROOT, ".build/SourcePackages"),
       export_options: {
         provisioningProfiles: app_store_export_profiles
       }
@@ -329,10 +362,12 @@ platform :ios do
       output_directory: BUILD_DIR,
       output_name: "nodeseek.ipa",
       include_symbols: true,
+      cloned_source_packages_path: File.join(ROOT, ".build/SourcePackages"),
       export_options: {
         provisioningProfiles: app_store_export_profiles
       }
     )
+    verify_ipa_version(options[:version])
     write_build_provenance
     upload_to_testflight(
       **testflight_upload_options,

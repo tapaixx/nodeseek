@@ -6,6 +6,10 @@ on:
       - "ios/v*"
   workflow_dispatch:
     inputs:
+      version:
+        description: "Optional build version override, e.g. 1.4.1 for TestFlight while App Store stays on 1.4.0. Source version is unchanged."
+        required: false
+        type: string
       build_number:
         description: "Optional App Store build number override. Defaults to Asia/Shanghai yyyyMMddHHmmss."
         required: false
@@ -42,8 +46,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Show Xcode version
-        run: xcodebuild -version
+      - name: Verify release toolchain
+        run: |
+          set -euo pipefail
+          # 与本地验证环境一致，镜像更新后也不能静默切换工具链。
+          expected_xcode=$'Xcode 27.2\nBuild version 27B52'
+          actual_xcode="$(xcodebuild -version)"
+          printf '%s\n' "$actual_xcode"
+          test "$actual_xcode" = "$expected_xcode"
+          swift_version="$(xcrun swift --version)"
+          printf '%s\n' "$swift_version"
+          [[ "$swift_version" == *'Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9 clang-2100.4.1.1)'* ]]
+          test "$(uname -m)" = arm64
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
@@ -60,13 +75,14 @@ jobs:
       - name: Prepare release inputs
         id: release
         env:
+          MANUAL_VERSION: ${{ inputs.version }}
           MANUAL_BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
           set -euo pipefail
 
           generated_build_number="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
 
-          # 版本号只认工程里的 MARKETING_VERSION：Info.plist 由它生成，构建时外部传入的版本会被覆盖
+          # 默认使用工程版本；手动覆盖由 Fastlane 在 CI 工作区写入工程，确保 Info.plist 和扩展版本一致。
           project_versions="$(grep -o 'MARKETING_VERSION = [^;]*' nodeseek.xcodeproj/project.pbxproj | sed 's/MARKETING_VERSION = //' | sort -u)"
           if [[ -z "${project_versions}" || "$(printf '%s\n' "${project_versions}" | wc -l | tr -d ' ')" != "1" ]]; then
             echo "MARKETING_VERSION must be set to exactly one value in project.pbxproj, got:" >&2
@@ -95,7 +111,13 @@ jobs:
             fi
             build_number="${generated_build_number}"
           else
+            version="${MANUAL_VERSION:-${version}}"
             build_number="${MANUAL_BUILD_NUMBER:-${generated_build_number}}"
+          fi
+
+          if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "version must contain two or three numeric components, got: ${version}" >&2
+            exit 1
           fi
 
           if [[ -z "${version}" || -z "${build_number}" ]]; then
@@ -113,8 +135,10 @@ jobs:
           echo "Release version=${version} build_number=${build_number}"
 
       - name: Build and upload to TestFlight
-        run: bundle exec fastlane beta build_number:${{ steps.release.outputs.build_number }}
+        run: bundle exec fastlane beta version:${{ steps.release.outputs.version }} build_number:${{ steps.release.outputs.build_number }}
         env:
+          FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "60"
+          CRASHLYTICS_SKIP_BUILD_PHASE_UPLOAD: "1"
           APP_IDENTIFIER: ${{ vars.APP_IDENTIFIER || 'com.mistj.nodeseek' }}
           APP_STORE_CONNECT_APP_ID: ${{ vars.APP_STORE_CONNECT_APP_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -135,6 +159,23 @@ jobs:
           TESTFLIGHT_SUBMIT_BETA_REVIEW: ${{ vars.TESTFLIGHT_SUBMIT_BETA_REVIEW || 'false' }}
           TESTFLIGHT_NOTIFY_EXTERNAL_TESTERS: ${{ vars.TESTFLIGHT_NOTIFY_EXTERNAL_TESTERS || 'false' }}
           TESTFLIGHT_USES_NON_EXEMPT_ENCRYPTION: ${{ vars.TESTFLIGHT_USES_NON_EXEMPT_ENCRYPTION || 'false' }}
+
+      # 即使 TestFlight 上传失败，只要已经生成符号也补传；直接调用同步工具，检查退出码。
+      - name: Upload symbols to Firebase Crashlytics
+        if: ${{ !cancelled() && (success() || hashFiles('build/*.dSYM.zip') != '') }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          symbols=(build/*.dSYM.zip)
+          if (( ${#symbols[@]} == 0 )); then
+            echo "::error::No dSYM archive was generated."
+            exit 1
+          fi
+          .build/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/upload-symbols \
+            -gsp nodeseek/Resources/GoogleService-Info.plist \
+            -p ios "${symbols[@]}"
+          echo "Crashlytics dSYM upload completed; server-side symbolication may take additional time." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Write manual Public Beta checklist
         if: success()

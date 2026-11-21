@@ -137,26 +137,59 @@ final class UserCollectionCellNode: ASCellNode {
     }
 }
 
-final class UserCommentCellNode: ASCellNode {
+final class UserCommentGroupCellNode: ASCellNode {
     private let titleNode = ASTextNode()
+    private let replies: [UserCommentReplyNode]
+
+    init(group: UserCommentGroup, traits: UITraitCollection = .current, onOpenComment: @escaping (UserCommentRecord) -> Void) {
+        replies = group.comments.map { record in
+            UserCommentReplyNode(record: record, traits: traits, onOpenComment: { onOpenComment(record) })
+        }
+        super.init()
+        automaticallyManagesSubnodes = true
+        selectionStyle = .default
+        backgroundColor = .clear
+        titleNode.maximumNumberOfLines = 0
+        let title = NSMutableAttributedString(attributedString: UserContentText.title(group.title))
+        title.addAttribute(.foregroundColor, value: ReadingColors.text.resolvedColor(with: traits), range: NSRange(location: 0, length: title.length))
+        titleNode.attributedText = title
+    }
+
+    override func layoutSpecThatFits(_ constrainedSize: ASSizeRange) -> ASLayoutSpec {
+        let stack = ASStackLayoutSpec.vertical()
+        stack.spacing = 4
+        stack.children = [titleNode] + replies.map { $0 as ASLayoutElement }
+        return ASInsetLayoutSpec(
+            insets: UIEdgeInsets(top: 12, left: 18, bottom: 8, right: 12),
+            child: stack
+        )
+    }
+}
+
+/// 整行可点：点回复文字和点右侧气泡一样跳到对应楼层，点标题仍打开帖子开头。
+private final class UserCommentReplyNode: ASControlNode {
     private let textNode = ASTextNode()
     private let commentJumpButton = ASButtonNode()
     private let onOpenComment: () -> Void
 
     init(
         record: UserCommentRecord,
+        traits: UITraitCollection,
         onOpenComment: @escaping () -> Void
     ) {
         self.onOpenComment = onOpenComment
         super.init()
         automaticallyManagesSubnodes = true
-        selectionStyle = .default
         backgroundColor = .clear
-        titleNode.maximumNumberOfLines = 2
-        titleNode.attributedText = UserContentText.title(record.title)
         textNode.maximumNumberOfLines = 2
-        textNode.attributedText = Self.commentText(record.text)
-        configureCommentJumpButton(floorID: record.floorID)
+        textNode.attributedText = Self.commentText(record.text, traits: traits)
+        configureCommentJumpButton(floorID: record.floorID, traits: traits)
+        addTarget(self, action: #selector(openCommentTapped), forControlEvents: .touchUpInside)
+        // 整行合并成一个按钮元素，旁白读出楼层和回复内容
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = "打开评论 #\(record.floorID)"
+        accessibilityValue = textNode.attributedText?.string
     }
 
     override func didLoad() {
@@ -164,38 +197,43 @@ final class UserCommentCellNode: ASCellNode {
         commentJumpButton.addTarget(self, action: #selector(openCommentTapped), forControlEvents: .touchUpInside)
     }
 
+    override var isHighlighted: Bool {
+        didSet { textNode.alpha = isHighlighted ? 0.5 : 1 }
+    }
+
     override func layoutSpecThatFits(_ constrainedSize: ASSizeRange) -> ASLayoutSpec {
         let textStack = ASStackLayoutSpec.vertical()
         textStack.spacing = 5
         textStack.style.flexGrow = 1
         textStack.style.flexShrink = 1
-        textStack.children = [titleNode, textNode]
+        textStack.children = [textNode]
 
         let row = ASStackLayoutSpec.horizontal()
         row.spacing = 10
         row.alignItems = .center
         row.children = [textStack, commentJumpButton]
-        return ASInsetLayoutSpec(insets: UIEdgeInsets(top: 12, left: 18, bottom: 12, right: 12), child: row)
+        return row
     }
 
-    private func configureCommentJumpButton(floorID: Int) {
+    private func configureCommentJumpButton(floorID: Int, traits: UITraitCollection) {
         let configuration = UIImage.SymbolConfiguration(
             font: PostListCellStyle.Typography.metadataFont,
             scale: .medium
         )
-        let image = UIImage(systemName: "text.bubble", withConfiguration: configuration)
+        let image = UIImage(systemName: "text.bubble", withConfiguration: configuration)?
+            .withTintColor(.secondaryLabel.resolvedColor(with: traits), renderingMode: .alwaysOriginal)
         commentJumpButton.setImage(image, for: .normal)
         commentJumpButton.tintColor = .secondaryLabel
-        commentJumpButton.style.preferredSize = CGSize(width: 34, height: 34)
+        commentJumpButton.style.preferredSize = CGSize(width: 44, height: 44)
         commentJumpButton.accessibilityLabel = "打开评论 #\(floorID)"
     }
 
-    private static func commentText(_ text: String) -> NSAttributedString {
+    private static func commentText(_ text: String, traits: UITraitCollection) -> NSAttributedString {
         NSAttributedString(
             string: text.trimmingCharacters(in: .whitespacesAndNewlines),
             attributes: [
                 .font: PostListCellStyle.Typography.metadataFont,
-                .foregroundColor: UIColor.secondaryLabel
+                .foregroundColor: UIColor.secondaryLabel.resolvedColor(with: traits)
             ]
         )
     }

@@ -10,7 +10,7 @@
 
 ## 版本号
 
-- 原版本读取工程所有 target 的 `MARKETING_VERSION`，当前是 `1.4.0`。
+- 原版本读取工程所有 target 的 `MARKETING_VERSION`，当前是 `1.4.2`。
 - 发版名称、标签和 App「关于」版本依次为 `1.3.1-1`、`1.3.1-2`；Git 标签带 `v` 前缀。
 - 序号按同一原版本已有的 fork 标签递增，原版本升级到 `1.3.2` 后从 `1.3.2-1` 开始。
 - iOS 的 `CFBundleShortVersionString` 保留数字格式，`CFBundleVersion` 使用序号；完整 fork 版本通过 `Build Release Version` 注入。
@@ -21,6 +21,8 @@
 ## 下载与安装
 
 每次发布包括 `NS-Connect-<版本>-unsigned.ipa`、`SHA256SUMS` 和 `build-provenance.json`。IPA 包含主 App 与 ProbeWidget 扩展。
+
+Fork Release 的无签名包关闭 Crashlytics 采集，归档时也不会上传符号到上游 Firebase 项目。
 
 IPA 未签名，需要用自己的 Apple 账号通过支持的侧载工具签名安装，不能直接点击安装。推送通知、App Groups 等能力取决于自行签名时使用的账号与描述文件。
 

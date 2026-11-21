@@ -64,6 +64,7 @@ jobs:
       - name: Archive unsigned iOS app
         if: steps.existing.outputs.skip != 'true'
         env:
+          CRASHLYTICS_SKIP_BUILD_PHASE_UPLOAD: "1"
           BASE_VERSION: ${{ steps.version.outputs.base_version }}
           BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
         run: |

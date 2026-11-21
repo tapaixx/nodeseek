@@ -666,7 +666,8 @@ private final class UserProfileBadgeLabel: UILabel {
     }
 }
 
-private final class UserProfileStatView: UIControl {
+final class UserProfileStatView: UIControl {
+    private let title: String
     private let separator = UIView()
     private let action: (() -> Void)?
 
@@ -676,15 +677,17 @@ private final class UserProfileStatView: UIControl {
 
     func setValue(_ value: String) {
         valueLabel.text = value
+        accessibilityLabel = "\(title) \(value)"
     }
 
     private let valueLabel = UILabel()
 
     init(value: String, title: String, action: (() -> Void)? = nil) {
+        self.title = title
         self.action = action
         super.init(frame: .zero)
 
-        valueLabel.text = value
+        setValue(value)
         valueLabel.font = .monospacedDigitSystemFont(ofSize: 20, weight: .bold)
         valueLabel.textColor = ReadingColors.text
         valueLabel.textAlignment = .center
@@ -737,7 +740,6 @@ private final class UserProfileStatView: UIControl {
         ])
 
         isAccessibilityElement = true
-        accessibilityLabel = "\(title) \(value)"
         accessibilityTraits = action == nil ? .staticText : .button
         if action != nil {
             addTarget(self, action: #selector(tapped), for: .touchUpInside)
@@ -850,10 +852,7 @@ final class UserProfileProgressCardView: UIView {
     private let levelTitleLabel = UILabel()
     private let levelValueLabel = UILabel()
     private let levelBar = UserProfileProgressBar(color: .systemIndigo)
-    private let checkInRow = UserProfileProgressRow(title: "签到", color: .systemOrange)
-    private let postRow = UserProfileProgressRow(title: "发帖", color: .systemBlue)
-    private let commentRow = UserProfileProgressRow(title: "评论", color: .systemTeal)
-    private let freeLikeRow = UserProfileProgressRow(title: "免费投喂", color: .systemPink)
+    private let rowsStack = UserTodayProgressRowsView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -879,11 +878,6 @@ final class UserProfileProgressCardView: UIView {
 
         let divider = UIView()
         divider.backgroundColor = .separator
-
-        let rowsStack = UIStackView(arrangedSubviews: [checkInRow, postRow, commentRow, freeLikeRow])
-        rowsStack.axis = .vertical
-        rowsStack.isLayoutMarginsRelativeArrangement = true
-        rowsStack.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
 
         let stack = UIStackView(arrangedSubviews: [levelStack, divider, rowsStack])
         stack.axis = .vertical
@@ -913,6 +907,29 @@ final class UserProfileProgressCardView: UIView {
         }
         levelBar.fraction = level.fraction
 
+        rowsStack.configure(today: today)
+    }
+}
+
+final class UserTodayProgressRowsView: UIStackView {
+    private let checkInRow = UserProfileProgressRow(title: "签到", color: .systemOrange)
+    private let postRow = UserProfileProgressRow(title: "发帖", color: .systemBlue)
+    private let commentRow = UserProfileProgressRow(title: "评论", color: .systemTeal)
+    private let freeLikeRow = UserProfileProgressRow(title: "免费投喂", color: .systemPink)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        axis = .vertical
+        isLayoutMarginsRelativeArrangement = true
+        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+        [checkInRow, postRow, commentRow, freeLikeRow].forEach(addArrangedSubview)
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(today: UserTodayProgressRecord) {
         if let gain = today.checkInGain {
             checkInRow.configure(fraction: 1, value: "+\(gain) ✓", isDone: true)
         } else {
