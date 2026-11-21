@@ -182,6 +182,26 @@ struct AppNavigationLayoutTests {
         #expect(mail.tabBarItem.image != nil)
     }
 
+    @Test func meTradeRowOpensOfficialTradingSystem() throws {
+        let me = MeViewController()
+        let navigation = UINavigationController(rootViewController: me)
+        me.loadViewIfNeeded()
+        let row = try #require(me.view.layoutTestView(identifier: "me-trade-row") as? UIControl)
+        row.sendActions(for: .touchUpInside)
+        #expect(navigation.topViewController is TradeHomeViewController)
+    }
+
+    @Test func tradeAuthorizationPopupAcceptsOnlyOfficialOriginAndConnectPath() {
+        let entry = TradeAuthorizationViewController.entryURL
+        let connect = URL(string: "https://www.nodeseek.com/connect?target=trade")!
+        #expect(TradeAuthorizationViewController.allowsAuthorizationPopup(from: entry, to: connect))
+        for destination in ["http://www.nodeseek.com/connect", "https://www.nodeseek.com.example.org/connect",
+                            "https://www.nodeseek.com:444/connect", "https://www.nodeseek.com/login"] {
+            #expect(!TradeAuthorizationViewController.allowsAuthorizationPopup(from: entry, to: URL(string: destination)!))
+        }
+        #expect(!TradeAuthorizationViewController.allowsAuthorizationPopup(from: URL(string: "https://example.org/"), to: connect))
+    }
+
     @Test func meProfileCardHandlesTapsAnywhereExceptLoginButton() throws {
         let viewController = MeViewController()
         viewController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)

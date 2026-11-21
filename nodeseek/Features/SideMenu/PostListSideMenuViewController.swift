@@ -23,6 +23,7 @@ final class PostListSideMenuViewController: UIViewController {
     var onSearchTapped: (() -> Void)?
     var onProbeTapped: (() -> Void)?
     var onMailTapped: (() -> Void)?
+    var onTradeTapped: (() -> Void)?
     var onSettingsTapped: (() -> Void)?
     private let accountController: PostListSideMenuAccountController
     private let notificationClient: NodeSeekNotificationClientProtocol
@@ -146,6 +147,12 @@ final class PostListSideMenuViewController: UIViewController {
     private let probeButton: UIButton = {
         let button = PostListSideMenuViewController.makeMenuButton(title: "探针", systemImageName: "server.rack")
         button.accessibilityIdentifier = "post-list-side-menu-probe-button"
+        return button
+    }()
+
+    private let tradeButton: UIButton = {
+        let button = PostListSideMenuViewController.makeMenuButton(title: TradeText.text("交易系统"), systemImageName: "arrow.left.arrow.right")
+        button.accessibilityIdentifier = "post-list-side-menu-trade-button"
         return button
     }()
 
@@ -388,6 +395,7 @@ final class PostListSideMenuViewController: UIViewController {
         recentVisitedButton.addTarget(self, action: #selector(recentVisitedButtonTapped), for: .touchUpInside)
         probeButton.addTarget(self, action: #selector(probeButtonTapped), for: .touchUpInside)
         mailButton.addTarget(self, action: #selector(mailButtonTapped), for: .touchUpInside)
+        tradeButton.addTarget(self, action: #selector(tradeButtonTapped), for: .touchUpInside)
         searchButton.addTarget(self, action: #selector(searchButtonTapped), for: .touchUpInside)
         postsEntryButton.addTarget(self, action: #selector(postsEntryButtonTapped), for: .touchUpInside)
         commentsEntryButton.addTarget(self, action: #selector(commentsEntryButtonTapped), for: .touchUpInside)
@@ -410,6 +418,7 @@ final class PostListSideMenuViewController: UIViewController {
         sideMenuView.addSubview(recentVisitedButton)
         sideMenuView.addSubview(probeButton)
         sideMenuView.addSubview(mailButton)
+        sideMenuView.addSubview(tradeButton)
         sideMenuView.addSubview(settingsButton)
 
         let sideMenuLeadingConstraint = sideMenuView.leadingAnchor.constraint(
@@ -467,8 +476,13 @@ final class PostListSideMenuViewController: UIViewController {
 
             mailButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             mailButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
-            mailButton.bottomAnchor.constraint(equalTo: settingsButton.topAnchor, constant: -8),
+            mailButton.bottomAnchor.constraint(equalTo: tradeButton.topAnchor, constant: -8),
             Self.menuButtonHeight(mailButton),
+
+            tradeButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
+            tradeButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
+            tradeButton.bottomAnchor.constraint(equalTo: settingsButton.topAnchor, constant: -8),
+            Self.menuButtonHeight(tradeButton),
 
             recentVisitedButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             recentVisitedButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
@@ -583,6 +597,11 @@ final class PostListSideMenuViewController: UIViewController {
     @objc private func mailButtonTapped() {
         hide(animated: true)
         onMailTapped?()
+    }
+
+    @objc private func tradeButtonTapped() {
+        hide(animated: true)
+        onTradeTapped?()
     }
 
     @objc private func searchButtonTapped() {

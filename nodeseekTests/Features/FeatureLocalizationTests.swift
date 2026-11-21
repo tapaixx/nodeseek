@@ -5,7 +5,7 @@ final class FeatureLocalizationTests: XCTestCase {
     func testSearchAndWidgetResourcesArePackagedInAllLanguages() throws {
         let widgetURL = try XCTUnwrap(Bundle.main.builtInPlugInsURL?.appendingPathComponent("ProbeWidget.appex"))
         let widget = try XCTUnwrap(Bundle(url: widgetURL))
-        for (bundle, table) in [(Bundle.main, "Mail"), (Bundle.main, "Search"), (Bundle.main, "ProbeWidget"), (widget, "ProbeWidget"), (widget, "Localizable")] {
+        for (bundle, table) in [(Bundle.main, "Mail"), (Bundle.main, "Search"), (Bundle.main, "Trade"), (Bundle.main, "ProbeWidget"), (widget, "ProbeWidget"), (widget, "Localizable")] {
             var referenceKeys: Set<String>?
             for language in ["zh-Hans", "zh-Hant", "en"] {
                 let path = try XCTUnwrap(bundle.path(forResource: table, ofType: "strings", inDirectory: nil, forLocalization: language))

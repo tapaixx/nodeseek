@@ -1,0 +1,248 @@
+import CryptoKit
+import Foundation
+import WebKit
+
+enum TradeText {
+    static func text(_ key: String) -> String {
+        NSLocalizedString(key, tableName: "Trade", comment: "")
+    }
+}
+
+struct TradeUser: Decodable, Identifiable {
+    let id: Int64
+    let username: String
+}
+
+struct TradeConversation: Decodable, Identifiable {
+    struct Preview: Decodable { let text: String? }
+    let id: Int64
+    let title: String?
+    let status: String?
+    let lastMessage: Preview?
+    var displayTitle: String { title.flatMap { $0.isEmpty ? nil : $0 } ?? TradeText.text("未命名交易") }
+}
+
+struct TradeRoom: Decodable {
+    struct Access: Decodable { let canWrite: Bool; let role: String? }
+    struct Progress: Decodable { let id: Int64; let stage: String; let progressStep: Int?; let steps: [Step]? }
+    struct Step: Decodable { let key: String; let label: String?; let title: String? }
+    struct Member: Decodable { let role: String }
+    let conversation: TradeConversation
+    let access: Access
+    let trade: Progress?
+    let members: [Member]?
+
+    var canInvite: Bool {
+        let roles = Set(["buyer", "seller", "agent"])
+        return conversation.status == "open" && trade?.stage == "draft" && roles.contains(access.role ?? "")
+            && !roles.isSubset(of: Set((members ?? []).map(\.role)))
+    }
+}
+
+struct TradeMessage: Decodable, Identifiable {
+    let id: Int64
+    let sender: TradeUser?
+    let content: String?
+    let createdAt: String?
+    let type: String?
+}
+
+struct TradeMessagePage: Decodable {
+    let messages: [TradeMessage]
+    let hasMore: Bool
+}
+
+enum TradeRole: String, CaseIterable, Identifiable {
+    case buyer, seller
+    var id: Self { self }
+    var title: String { TradeText.text(self == .buyer ? "买家" : "卖家") }
+}
+
+@MainActor
+protocol TradeServing: AnyObject {
+    func currentUser() async throws -> TradeUser?
+    func conversations() async throws -> [TradeConversation]
+    func agents() async throws -> [TradeUser]
+    func create(title: String, role: TradeRole, agentID: Int64) async throws -> Int64
+    func room(id: Int64) async throws -> TradeRoom
+    func messages(id: Int64, before: Int64?) async throws -> TradeMessagePage
+    func send(_ text: String, to id: Int64) async throws -> TradeMessage
+    func invitation(for tradeID: Int64) async throws -> URL
+}
+
+@MainActor
+final class TradeAPIClient: TradeServing {
+    static let webURL = URL(string: "https://agent.nodeseek.org/")!
+    private static let apiHost = "agent-api.nodeseek.org"
+    typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
+
+    enum Failure: LocalizedError {
+        case signInRequired, invalidResponse, rejected
+
+        var errorDescription: String? {
+            switch self {
+            case .signInRequired: TradeText.text("请先登录交易系统")
+            case .invalidResponse: TradeText.text("无法读取交易数据，请稍后重试。")
+            case .rejected: TradeText.text("交易系统未接受此请求，请刷新后确认结果。")
+            }
+        }
+    }
+
+    private struct SigningResponse: Decodable { let kid: String; let key: String; let serverTime: Double }
+    private struct SigningSession {
+        let kid: String
+        let key: SymmetricKey
+        let timeOffset: Double
+        var expiry: Double { Double(kid.split(separator: ".").first ?? "") ?? 0 }
+    }
+    private struct UserResponse: Decodable { let user: TradeUser? }
+    private struct RoomsResponse: Decodable { let conversations: [TradeConversation] }
+    private struct AgentsResponse: Decodable { let agents: [TradeUser] }
+    private struct CreatedResponse: Decodable { let conversationId: Int64 }
+    private struct MessageResponse: Decodable { let message: TradeMessage }
+    private struct CreateBody: Encodable { let role: String; let title: String; let agentUserId: Int64 }
+    private struct MessageBody: Encodable { let content: String }
+    private struct InviteResponse: Decodable { let token: String }
+    private struct ErrorResponse: Decodable { let code: String? }
+
+    private let transport: Transport
+    private let cookies: () async -> [HTTPCookie]
+    private let now: () -> Date
+    private var signingSession: SigningSession?
+
+    init(transport: Transport? = nil, cookies: (() async -> [HTTPCookie])? = nil, now: @escaping () -> Date = Date.init) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        let session = URLSession(configuration: configuration, delegate: TradeRedirectPolicy(), delegateQueue: nil)
+        self.transport = transport ?? { try await session.data(for: $0) }
+        self.cookies = cookies ?? { await WKWebsiteDataStore.default().httpCookieStore.allCookies() }
+        self.now = now
+    }
+
+    func currentUser() async throws -> TradeUser? {
+        try await request(UserResponse.self, path: "/api/auth/me").user
+    }
+
+    func conversations() async throws -> [TradeConversation] {
+        try await request(RoomsResponse.self, path: "/api/common/conversations?type=trade").conversations
+    }
+
+    func agents() async throws -> [TradeUser] {
+        try await request(AgentsResponse.self, path: "/api/common/agents").agents
+    }
+
+    func create(title: String, role: TradeRole, agentID: Int64) async throws -> Int64 {
+        try await request(CreatedResponse.self, path: "/api/common/trades", method: "POST",
+                          body: encode(CreateBody(role: role.rawValue, title: title, agentUserId: agentID))).conversationId
+    }
+
+    func room(id: Int64) async throws -> TradeRoom {
+        try await request(TradeRoom.self, path: "/api/common/conversations/\(id)")
+    }
+
+    func messages(id: Int64, before: Int64? = nil) async throws -> TradeMessagePage {
+        let cursor = before.map { "&before_id=\($0)" } ?? ""
+        return try await request(TradeMessagePage.self, path: "/api/common/conversations/\(id)/messages?limit=50\(cursor)")
+    }
+
+    func send(_ text: String, to id: Int64) async throws -> TradeMessage {
+        try await request(MessageResponse.self, path: "/api/common/conversations/\(id)/messages", method: "POST",
+                          body: encode(MessageBody(content: text))).message
+    }
+
+    func invitation(for tradeID: Int64) async throws -> URL {
+        let result = try await request(InviteResponse.self, path: "/api/common/trades/\(tradeID)/invites", method: "POST",
+                                       body: encode(["kind": "participant"]))
+        guard !result.token.isEmpty, result.token.utf8.allSatisfy({ byte in
+            (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte) || byte == 45 || byte == 95
+        }) else { throw Failure.invalidResponse }
+        return Self.webURL.appendingPathComponent("chat/invite").appendingPathComponent(result.token)
+    }
+
+    private func encode<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return try encoder.encode(value)
+    }
+
+    private var decoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }
+
+    private func makeRequest(path: String, method: String) async -> URLRequest {
+        var request = URLRequest(url: URL(string: "https://\(Self.apiHost)\(path)")!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("https://agent.nodeseek.org", forHTTPHeaderField: "Origin")
+        request.setValue("nTrade", forHTTPHeaderField: "X-Application")
+        let requestPath = request.url?.path ?? ""
+        let scoped = await cookies().filter { cookie in
+            let domain = cookie.domain.lowercased()
+            return (domain == Self.apiHost || domain == ".\(Self.apiHost)" || domain == ".nodeseek.org")
+                && (cookie.expiresDate.map { $0 > now() } ?? true)
+                && (requestPath == cookie.path || requestPath.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path : cookie.path + "/"))
+        }
+        for (name, value) in HTTPCookie.requestHeaderFields(with: scoped) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        return request
+    }
+
+    private func signing() async throws -> SigningSession {
+        if let signingSession, signingSession.expiry - (now().timeIntervalSince1970 * 1_000 + signingSession.timeOffset) > 60_000 {
+            return signingSession
+        }
+        let request = await makeRequest(path: "/edge-api/auth/sign-key", method: "POST")
+        let (data, response) = try await transport(request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let value = try? decoder.decode(SigningResponse.self, from: data) else { throw Failure.invalidResponse }
+        let normalized = value.key.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        let padded = normalized + String(repeating: "=", count: (4 - normalized.count % 4) % 4)
+        guard let key = Data(base64Encoded: padded), !key.isEmpty else { throw Failure.invalidResponse }
+        let result = SigningSession(kid: value.kid, key: SymmetricKey(data: key), timeOffset: value.serverTime - now().timeIntervalSince1970 * 1_000)
+        signingSession = result
+        return result
+    }
+
+    private func request<T: Decodable>(_ type: T.Type, path: String, method: String = "GET", body: Data? = nil, mayRefreshSignature: Bool = true) async throws -> T {
+        let signing = try await signing()
+        var request = await makeRequest(path: path, method: method)
+        let stamp = String(Int64(now().timeIntervalSince1970 * 1_000 + signing.timeOffset))
+        let signature = HMAC<SHA256>.authenticationCode(for: Data("v1\n\(method)\n\(path)\n\(stamp)".utf8), using: signing.key)
+        request.setValue(signing.kid, forHTTPHeaderField: "X-Sign-Kid")
+        request.setValue(stamp, forHTTPHeaderField: "X-Sign-Ts")
+        request.setValue(Data(signature).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: ""), forHTTPHeaderField: "X-Sign")
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await transport(request)
+        try Task.checkCancellation()
+        guard let status = (response as? HTTPURLResponse)?.statusCode else { throw Failure.invalidResponse }
+        if status == 401 {
+            if (try? decoder.decode(ErrorResponse.self, from: data))?.code == "sign_invalid" {
+                signingSession = nil
+                if method == "GET", mayRefreshSignature {
+                    return try await self.request(type, path: path, mayRefreshSignature: false)
+                }
+                throw Failure.rejected
+            }
+            throw Failure.signInRequired
+        }
+        guard (200...299).contains(status) else { throw Failure.rejected }
+        guard let value = try? decoder.decode(type, from: data) else { throw Failure.invalidResponse }
+        return value
+    }
+}
+
+private final class TradeRedirectPolicy: NSObject, URLSessionTaskDelegate {
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                                newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}

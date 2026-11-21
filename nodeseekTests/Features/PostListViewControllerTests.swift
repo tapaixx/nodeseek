@@ -514,6 +514,7 @@ struct PostListViewControllerTests {
         let recentVisitedButton = try #require(viewController.view.firstButton(accessibilityIdentifier: "post-list-side-menu-recent-visited-button"))
         let probeButton = try #require(viewController.view.firstButton(accessibilityIdentifier: "post-list-side-menu-probe-button"))
         let mailButton = try #require(viewController.view.firstButton(accessibilityIdentifier: "post-list-side-menu-mail-button"))
+        let tradeButton = try #require(viewController.view.firstButton(accessibilityIdentifier: "post-list-side-menu-trade-button"))
         let settingsButton = try #require(viewController.view.firstButton(accessibilityIdentifier: "post-list-side-menu-settings-button"))
         let sideMenuHost = viewController.children.first {
             $0.view.firstView(accessibilityIdentifier: "post-list-side-menu") != nil
@@ -640,6 +641,8 @@ struct PostListViewControllerTests {
         UIView.setAnimationsEnabled(animationsWereEnabled)
 
         #expect(presenter.didTapMailCount == 1)
+        tradeButton.sendActions(for: .touchUpInside)
+        #expect(presenter.didTapTradeCount == 1)
         #expect(sideMenu.frame.maxX <= 0.5)
 
         UIView.setAnimationsEnabled(false)
@@ -1070,6 +1073,7 @@ private final class SpyPostListPresenter: PostListPresenterProtocol {
     private(set) var didTapSettingsCount = 0
     private(set) var didTapProbeCount = 0
     private(set) var didTapMailCount = 0
+    private(set) var didTapTradeCount = 0
     private(set) var didTapCategoryPreferencesCount = 0
     private(set) var accountProfileURLs: [URL] = []
     private(set) var didTapLogFileCount = 0
@@ -1129,6 +1133,8 @@ private final class SpyPostListPresenter: PostListPresenterProtocol {
     func didTapMail() {
         didTapMailCount += 1
     }
+
+    func didTapTrade() { didTapTradeCount += 1 }
 
     func didTapCategoryPreferences() {
         didTapCategoryPreferencesCount += 1

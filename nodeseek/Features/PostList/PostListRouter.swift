@@ -108,6 +108,10 @@ class PostListRouter: PostListRouterProtocol {
         show(SeekMailHomeViewController())
     }
 
+    func navigateToTrade() {
+        show(TradeHomeViewController())
+    }
+
     func navigateToPostCategoryPreferences() {
         show(PostCategoryPreferencesViewController())
     }

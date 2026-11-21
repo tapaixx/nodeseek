@@ -146,6 +146,10 @@ class PostListPresenter: PostListPresenterProtocol {
         router.navigateToMail()
     }
 
+    func didTapTrade() {
+        router.navigateToTrade()
+    }
+
     func didTapSettings() {
         #if DEBUG
         let detailTestAction: (@MainActor () -> Void)? = { [weak self] in

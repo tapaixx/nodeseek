@@ -651,6 +651,8 @@ private final class SpyPostListRouter: PostListRouterProtocol {
         navigateToMailCount += 1
     }
 
+    func navigateToTrade() {}
+
     func navigateToSettings(
         onLogout: @escaping @MainActor () -> Void,
         onLogFile: @escaping @MainActor () -> Void,

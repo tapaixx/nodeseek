@@ -41,6 +41,7 @@ final class MeViewController: UIViewController {
     private let recentRow = MeListRowView(symbolName: "clock.arrow.circlepath", title: "最近浏览")
     private let probeRow = MeListRowView(symbolName: "server.rack", title: "探针")
     private let mailRow = MeListRowView(symbolName: "envelope", title: SeekMailL10n.text("邮箱"))
+    private let tradeRow = MeListRowView(symbolName: "arrow.left.arrow.right", title: TradeText.text("交易系统"))
 
     init(
         accountController: PostListSideMenuAccountController? = nil,
@@ -107,7 +108,7 @@ final class MeViewController: UIViewController {
 
     @objc private func appTextSizeDidChange() {
         profileCard.updateTextSize()
-        [checkInRow, discussionsRow, commentsRow, collectionsRow, recentRow, probeRow, mailRow].forEach { $0.updateTextSize() }
+        [checkInRow, discussionsRow, commentsRow, collectionsRow, recentRow, probeRow, mailRow, tradeRow].forEach { $0.updateTextSize() }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -160,7 +161,7 @@ final class MeViewController: UIViewController {
         let toolsHeader = Self.makeSectionHeader("工具")
         contentStack.addArrangedSubview(toolsHeader)
         contentStack.setCustomSpacing(7, after: toolsHeader)
-        contentStack.addArrangedSubview(Self.makeGroup([probeRow, mailRow]))
+        contentStack.addArrangedSubview(Self.makeGroup([probeRow, mailRow, tradeRow]))
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -187,6 +188,7 @@ final class MeViewController: UIViewController {
         recentRow.addTarget(self, action: #selector(recentTapped), for: .touchUpInside)
         probeRow.addTarget(self, action: #selector(probeTapped), for: .touchUpInside)
         mailRow.addTarget(self, action: #selector(mailTapped), for: .touchUpInside)
+        tradeRow.addTarget(self, action: #selector(tradeTapped), for: .touchUpInside)
         discussionsRow.accessibilityIdentifier = "me-discussions-row"
         commentsRow.accessibilityIdentifier = "me-comments-row"
         collectionsRow.accessibilityIdentifier = "me-collections-row"
@@ -194,6 +196,7 @@ final class MeViewController: UIViewController {
         recentRow.accessibilityIdentifier = "me-recent-row"
         probeRow.accessibilityIdentifier = "me-probe-row"
         mailRow.accessibilityIdentifier = "me-mail-row"
+        tradeRow.accessibilityIdentifier = "me-trade-row"
     }
 
     // MARK: - Data
@@ -387,6 +390,10 @@ final class MeViewController: UIViewController {
 
     @objc private func mailTapped() {
         router.navigateToMail()
+    }
+
+    @objc private func tradeTapped() {
+        router.navigateToTrade()
     }
 
     /// 未登录时转去登录，返回是否可继续。
