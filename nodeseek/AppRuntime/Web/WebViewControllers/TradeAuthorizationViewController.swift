@@ -8,12 +8,16 @@ final class TradeAuthorizationViewController: BaseWebViewController {
     private let retryButton = UIButton(type: .system)
     private var urlObservation: NSKeyValueObservation?
     private var onAuthorized: (() -> Void)?
+    private let verifySession: () async throws -> Bool
+    private var isVerifyingSession = false
+    private var didRequestConnect = false
 
     override var usesCustomUserAgent: Bool { false }
 
-    init(onAuthorized: @escaping () -> Void) {
+    init(automaticallyLoadsPage: Bool = true, verifySession: @escaping () async throws -> Bool, onAuthorized: @escaping () -> Void) {
+        self.verifySession = verifySession
         self.onAuthorized = onAuthorized
-        super.init(initialURL: Self.entryURL, pageTitle: TradeText.text("NodeSeek 授权"))
+        super.init(initialURL: Self.entryURL, pageTitle: TradeText.text("NodeSeek 授权"), automaticallyLoadsPage: automaticallyLoadsPage)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -28,15 +32,50 @@ final class TradeAuthorizationViewController: BaseWebViewController {
 
     override func configureNavigationItems() {
         navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
+            self?.onAuthorized = nil
             self?.dismiss(animated: true)
+        })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: TradeText.text("检查登录状态"), primaryAction: UIAction { [weak self] _ in
+            self?.verifyAuthorization()
         })
     }
 
     private func checkAuthorized(_ url: URL) {
         guard presentedViewController == nil, Self.isTradeURL(url),
-              url.path == "/chat" || url.path == "/chat/", let onAuthorized else { return }
-        self.onAuthorized = nil
-        dismiss(animated: true, completion: onAuthorized)
+              url.path == "/chat" || url.path == "/chat/" else { return }
+        verifyAuthorization()
+    }
+
+    private func verifyAuthorization() {
+        guard !isVerifyingSession, onAuthorized != nil, presentedViewController == nil else { return }
+        isVerifyingSession = true
+        navigationItem.rightBarButtonItem?.isEnabled = false
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                isVerifyingSession = false
+                navigationItem.rightBarButtonItem?.isEnabled = true
+            }
+            let isAuthorized = (try? await verifySession()) == true
+            guard let onAuthorized, view.window != nil else { return }
+            guard isAuthorized else {
+                showSessionHint()
+                return
+            }
+            self.onAuthorized = nil
+            dismissAfterPresentation(navigationController ?? self, completion: onAuthorized)
+        }
+    }
+
+    private func showSessionHint() {
+        guard presentedViewController == nil else { return }
+        let alert = UIAlertController(
+            title: TradeText.text("尚未确认交易登录"),
+            message: TradeText.text("检查登录状态不会发起 connect。若官方提示授权次数已达上限，请等待限制解除；论坛登录态不能替代交易授权。"),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: TradeText.text("关闭"), style: .cancel))
+        present(alert, animated: true)
     }
 
     override func configureWebView() {
@@ -116,7 +155,14 @@ final class TradeAuthorizationViewController: BaseWebViewController {
         guard webView === self.webView, action.targetFrame == nil, let url = action.request.url else { return nil }
         if action.sourceFrame.isMainFrame, Self.allowsAuthorizationPopup(from: action.sourceFrame.request.url, to: url) {
             guard view.window != nil, presentedViewController == nil else { return nil }
+            // 一次登录流程只请求一次授权；回跳异常时先检查会话，避免反复消耗官方额度。
+            guard !didRequestConnect else {
+                verifyAuthorization()
+                return nil
+            }
+            didRequestConnect = true
             let popup = WKWebView(frame: .zero, configuration: configuration)
+            popup.customUserAgent = WebRequestFingerprint.userAgent
             popup.navigationDelegate = self
             popup.uiDelegate = self
             let controller = UIViewController()
@@ -150,9 +196,21 @@ final class TradeAuthorizationViewController: BaseWebViewController {
         authorizationController = nil
         authorizationWebView = nil
         popup?.stopLoading()
-        controller?.dismiss(animated: true) { [weak self] in
+        guard let controller else { return }
+        dismissAfterPresentation(controller) { [weak self] in
             if let completion { completion() }
             else if let self, let url = self.webView.url { self.checkAuthorized(url) }
+        }
+    }
+
+    private func dismissAfterPresentation(_ controller: UIViewController, completion: @escaping () -> Void) {
+        // 复用登录态时回调可能早于弹窗动画结束；先等展示完成，避免关闭请求丢失。
+        if controller.isBeingPresented, let transition = controller.transitionCoordinator {
+            transition.animate(alongsideTransition: nil) { _ in
+                controller.dismiss(animated: true, completion: completion)
+            }
+        } else {
+            controller.dismiss(animated: true, completion: completion)
         }
     }
 

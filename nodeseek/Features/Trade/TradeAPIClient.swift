@@ -76,7 +76,7 @@ final class TradeAPIClient: TradeServing {
     private static let apiHost = "agent-api.nodeseek.org"
     typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
 
-    enum Failure: LocalizedError {
+    enum Failure: LocalizedError, Equatable {
         case signInRequired, invalidResponse, rejected
 
         var errorDescription: String? {
@@ -107,10 +107,12 @@ final class TradeAPIClient: TradeServing {
 
     private let transport: Transport
     private let cookies: () async -> [HTTPCookie]
+    private let storeCookies: ([HTTPCookie]) async -> Void
     private let now: () -> Date
     private var signingSession: SigningSession?
 
-    init(transport: Transport? = nil, cookies: (() async -> [HTTPCookie])? = nil, now: @escaping () -> Date = Date.init) {
+    init(transport: Transport? = nil, cookies: (() async -> [HTTPCookie])? = nil,
+         storeCookies: (([HTTPCookie]) async -> Void)? = nil, now: @escaping () -> Date = Date.init) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
@@ -118,6 +120,10 @@ final class TradeAPIClient: TradeServing {
         let session = URLSession(configuration: configuration, delegate: TradeRedirectPolicy(), delegateQueue: nil)
         self.transport = transport ?? { try await session.data(for: $0) }
         self.cookies = cookies ?? { await WKWebsiteDataStore.default().httpCookieStore.allCookies() }
+        self.storeCookies = storeCookies ?? { cookies in
+            let store = WKWebsiteDataStore.default().httpCookieStore
+            for cookie in cookies { await store.setCookie(cookie) }
+        }
         self.now = now
     }
 
@@ -198,6 +204,7 @@ final class TradeAPIClient: TradeServing {
         }
         let request = await makeRequest(path: "/edge-api/auth/sign-key", method: "POST")
         let (data, response) = try await transport(request)
+        await captureCookies(from: response)
         guard (response as? HTTPURLResponse)?.statusCode == 200,
               let value = try? decoder.decode(SigningResponse.self, from: data) else { throw Failure.invalidResponse }
         let normalized = value.key.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
@@ -206,6 +213,21 @@ final class TradeAPIClient: TradeServing {
         let result = SigningSession(kid: value.kid, key: SymmetricKey(data: key), timeOffset: value.serverTime - now().timeIntervalSince1970 * 1_000)
         signingSession = result
         return result
+    }
+
+    private func captureCookies(from response: URLResponse) async {
+        guard let response = response as? HTTPURLResponse,
+              let url = response.url, url.scheme == "https", url.host == Self.apiHost,
+              url.port == nil || url.port == 443 else { return }
+        let headers = response.allHeaderFields.reduce(into: [String: String]()) { headers, entry in
+            if let name = entry.key as? String, let value = entry.value as? String { headers[name] = value }
+        }
+        let cookies = HTTPCookie.cookies(withResponseHeaderFields: headers, for: url).filter {
+            let domain = $0.domain.lowercased()
+            return domain == Self.apiHost || domain == ".\(Self.apiHost)" || domain == ".nodeseek.org"
+        }
+        // 原生请求和授权网页共用同一份会话，也保存续期、轮换和退出产生的 Cookie。
+        if !cookies.isEmpty { await storeCookies(cookies) }
     }
 
     private func request<T: Decodable>(_ type: T.Type, path: String, method: String = "GET", body: Data? = nil, mayRefreshSignature: Bool = true) async throws -> T {
@@ -222,6 +244,7 @@ final class TradeAPIClient: TradeServing {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await transport(request)
+        await captureCookies(from: response)
         try Task.checkCancellation()
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw Failure.invalidResponse }
         if status == 401 {

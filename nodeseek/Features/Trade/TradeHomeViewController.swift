@@ -12,11 +12,22 @@ final class TradeHomeModel: ObservableObject {
     @Published private(set) var agents: [TradeUser] = []
     @Published private(set) var failure: String?
     @Published private(set) var isCreating = false
+    @Published private(set) var isCheckingSignIn = false
     var onLogin: (() -> Void)?
     var onOpen: ((Int64) -> Void)?
     private var isLoading = false
 
     init(api: TradeServing) { self.api = api }
+
+    func signIn() async {
+        guard !isCheckingSignIn, !isLoading else { return }
+        isCheckingSignIn = true
+        defer { isCheckingSignIn = false }
+        // 登录按钮显示后，会话可能已由另一个页面恢复；先复用，避免再消耗 connect 次数。
+        await load()
+        guard !Task.isCancelled, state == .signedOut else { return }
+        onLogin?()
+    }
 
     func load() async {
         guard !isLoading else { return }
@@ -82,7 +93,10 @@ final class TradeHomeViewController: UIHostingController<TradeHomeView> {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func openAuthorization() {
-        let authorization = TradeAuthorizationViewController { [weak self] in
+        guard presentedViewController == nil else { return }
+        let authorization = TradeAuthorizationViewController(verifySession: { [api = model.api] in
+            try await api.currentUser() != nil
+        }) { [weak self] in
             Task { await self?.model.load() }
         }
         present(UINavigationController(rootViewController: authorization), animated: true)
@@ -105,7 +119,10 @@ struct TradeHomeView: View {
             case .loading:
                 ProgressView()
             case .signedOut:
-                Button(TradeText.text("使用 NodeSeek 登录")) { model.onLogin?() }
+                Button(TradeText.text("使用 NodeSeek 登录")) { Task { await model.signIn() } }
+                    .disabled(model.isCheckingSignIn)
+                Text(TradeText.text("优先使用已有交易会话；首次授权会使用 App 当前的 NodeSeek 登录态。"))
+                    .font(.footnote).foregroundStyle(.secondary)
             case .failed:
                 Button(TradeText.text("重试")) { Task { await model.load() } }
             case .ready:
