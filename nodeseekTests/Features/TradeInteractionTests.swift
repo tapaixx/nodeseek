@@ -7,6 +7,24 @@ import Testing
 
 @MainActor
 struct TradeInteractionTests {
+    @Test func eventsDuringFetchTriggerOneCatchUpRead() async throws {
+        let api = InteractionStub(detail: try room())
+        let model = TradeRoomModel(id: 42, api: api)
+        model.isVisible = true
+        api.suspendNextRoom = true
+        let loading = Task { await model.refreshFromEvent() }
+        while api.pendingRoom == nil { await Task.yield() }
+        for _ in 0..<5 { await model.refreshFromEvent() }
+        #expect(api.roomReads == 1)
+        api.pendingRoom?.resume()
+        await loading.value
+        let deadline = Date().addingTimeInterval(2)
+        while api.roomReads < 2 && Date() < deadline { await Task.yield() }
+        #expect(api.roomReads == 2)
+        model.isVisible = false
+        await model.refreshFromEvent()
+        #expect(api.roomReads == 2)
+    }
     private func room(role: String = "buyer", stage: String = "in_progress", step: String = "buyer_paid", version: Int = 1) throws -> TradeRoom {
         let data = Data("""
         {"conversation":{"id":42,"title":"测试交易","status":"open"},"access":{"can_write":true,"role":"\(role)"},
@@ -190,6 +208,9 @@ struct TradeInteractionTests {
 
 @MainActor
 final class InteractionStub: TradeServing {
+    var roomReads = 0
+    var suspendNextRoom = false
+    var pendingRoom: CheckedContinuation<Void, Never>?
     let detail: TradeRoom
     var actionCalls = 0
     var readCalls = 0
@@ -207,7 +228,14 @@ final class InteractionStub: TradeServing {
     }
     func agents() async throws -> [TradeUser] { throw URLError(.timedOut) }
     func create(title: String, role: TradeRole, agentID: Int64) async throws -> Int64 { 42 }
-    func room(id: Int64) async throws -> TradeRoom { detail }
+    func room(id: Int64) async throws -> TradeRoom {
+        roomReads += 1
+        if suspendNextRoom {
+            suspendNextRoom = false
+            await withCheckedContinuation { pendingRoom = $0 }
+        }
+        return detail
+    }
     func messages(id: Int64, before: Int64?) async throws -> TradeMessagePage {
         .init(messages: [.init(id: 10, sender: .init(id: 2, username: "seller"), content: "hello", createdAt: "2026-11-23T12:34:56.123Z", type: "text")], hasMore: false)
     }

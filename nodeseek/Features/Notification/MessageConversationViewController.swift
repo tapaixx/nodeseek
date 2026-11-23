@@ -42,6 +42,8 @@ final class MessageConversationViewController: UIViewController, UITableViewData
     override func viewDidLoad() {
         super.viewDidLoad()
         NotificationCenter.default.addObserver(self, selector: #selector(verificationChanged), name: SiteVerificationCoordinator.didChange, object: SiteVerificationCoordinator.shared)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshWhenActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(messageArrived(_:)), name: AppMessageCenter.didReceive, object: nil)
         configureUI()
         model.onChange = { [weak self] in self?.render() }
         render()
@@ -226,11 +228,8 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         confirmRetryButton.isHidden = !model.deliveryUncertain
         input.isEditable = !model.isSending
         if input.text != model.draft { input.text = model.draft }
-        placeholder.isHidden = !model.draft.isEmpty
-        resizeInput()
         sendButton.setTitle(model.isSending ? "发送中…" : "发送", for: .normal)
-        sendButton.isEnabled = model.hasLoaded && !model.isSending && !model.isLoading && !model.deliveryUncertain
-            && !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        updateComposer()
         if !model.isLoading { refreshControl.endRefreshing() }
         let empty = UILabel()
         empty.text = model.hasLoaded ? "暂无私信，可以发送第一条消息" : ""
@@ -250,6 +249,15 @@ final class MessageConversationViewController: UIViewController, UITableViewData
     }
 
     @objc private func refresh() { Task { [weak self] in await self?.model.load() } }
+    @objc private func refreshWhenActive() {
+        guard refreshTask != nil, viewIfLoaded?.window != nil, UIApplication.shared.applicationState == .active,
+              !SiteVerificationCoordinator.shared.automaticRequestsPaused else { return }
+        refresh()
+    }
+    @objc private func messageArrived(_ notification: Notification) {
+        guard let peers = notification.userInfo?["messageParticipantIDs"] as? Set<Int>, peers.contains(model.participantID) else { return }
+        refreshWhenActive()
+    }
     @objc private func confirmRetry() { model.acknowledgeUncertainDelivery() }
     @objc private func send() {
         Task { [weak self] in
@@ -263,7 +271,14 @@ final class MessageConversationViewController: UIViewController, UITableViewData
 
     func textViewDidChange(_ textView: UITextView) {
         model.draft = textView.text
-        render()
+        updateComposer()
+    }
+
+    private func updateComposer() {
+        placeholder.isHidden = !model.draft.isEmpty
+        resizeInput()
+        sendButton.isEnabled = model.hasLoaded && !model.isSending && !model.deliveryUncertain
+            && input.markedTextRange == nil && !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { renderedMessages.count }

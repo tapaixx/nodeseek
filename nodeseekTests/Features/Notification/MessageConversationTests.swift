@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor
 final class MessageConversationTests: XCTestCase {
+    func testSlowRefreshDoesNotBlockSendOrReplaceNewerThread() async throws {
+        let client = StubMessageClient()
+        let model = try await makeModel(client: client)
+        await model.load()
+        client.suspendNextLoad = true
+        let refresh = Task { await model.load() }
+        while client.pendingLoad == nil { await Task.yield() }
+        model.draft = "你好"
+        await model.send()
+        XCTAssertEqual(client.sentContents, ["你好"])
+        XCTAssertEqual(client.loadCount, 3)
+        XCTAssertTrue(model.draft.isEmpty)
+        client.pendingLoad?.resume(throwing: URLError(.timedOut))
+        await refresh.value
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isLoading)
+    }
     func testLoadsConversationAndMarksOnlyIncomingUnreadMessages() async throws {
         let client = StubMessageClient()
         let model = try await makeModel(client: client)
@@ -197,6 +214,18 @@ final class MessageConversationTests: XCTestCase {
             XCTFail("Expected uncertain delivery")
         } catch {
             XCTAssertEqual(error as? NodeSeekMessageError, .deliveryUncertain)
+        }
+    }
+
+    func testPreflightChallengeRequiresVerificationRatherThanDuplicateDeliveryReview() async {
+        let verification = SiteVerificationCoordinator()
+        let client = NodeSeekMessageClient(verification: verification, pageAction: { _, _, _ in ["ok": false, "reason": "challenge"] })
+        do {
+            try await client.send(content: "你好", participantID: 20)
+            XCTFail("Expected verification before submission")
+        } catch {
+            XCTAssertTrue(error is NodeSeekVerificationRequired)
+            XCTAssertEqual(verification.requiredURL, NodeSeekMessageClient.webURL(participantID: 20))
         }
     }
 
@@ -416,6 +445,9 @@ private final class MessageURLProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor
 private final class StubMessageClient: NodeSeekMessageClientProtocol {
+    var suspendNextLoad = false
+    var pendingLoad: CheckedContinuation<Void, Error>?
+    var loadCount = 0
     var markedIDs: [[Int]] = []
     var sentContents: [String] = []
     var sendError: Error?
@@ -427,6 +459,11 @@ private final class StubMessageClient: NodeSeekMessageClientProtocol {
     var pendingMark: CheckedContinuation<Void, Never>?
 
     func loadConversation(participantID: Int) async throws -> NodeSeekMessageThread {
+        loadCount += 1
+        if suspendNextLoad {
+            suspendNextLoad = false
+            try await withCheckedThrowingContinuation { pendingLoad = $0 }
+        }
         if let loadError { throw loadError }
         return try JSONDecoder().decode(NodeSeekMessageThread.self, from: Data("""
         {"success":true,"talkTo":{"member_id":20,"member_name":"Alice"},"msgArray":[

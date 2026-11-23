@@ -19,6 +19,7 @@ final class TradeLiveEvents {
                     ["agent-api.nodeseek.org", ".agent-api.nodeseek.org", ".nodeseek.org"].contains($0.domain.lowercased())
                         && ($0.expiresDate.map { $0 > Date() } ?? true) && $0.path == "/"
                 }
+                guard !Task.isCancelled else { return }
                 for (key, value) in HTTPCookie.requestHeaderFields(with: cookies) { request.setValue(value, forHTTPHeaderField: key) }
                 let configuration = URLSessionConfiguration.ephemeral
                 configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false

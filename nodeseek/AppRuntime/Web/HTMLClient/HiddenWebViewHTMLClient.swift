@@ -705,6 +705,7 @@ final class HiddenWebViewLoader: NSObject, WKNavigationDelegate {
                 "ok": false,
                 "statusCode": response.statusCode,
                 "reason": "challenge",
+                "requiresLogin": { if case .loginRequired = challenge { return true }; return false }(),
                 "message": Self.message(for: challenge)
             ]
         }

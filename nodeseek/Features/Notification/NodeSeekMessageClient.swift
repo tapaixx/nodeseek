@@ -79,6 +79,12 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
             throw NodeSeekMessageError.deliveryUncertain
         }
         guard result["ok"] as? Bool == true else {
+            if result["reason"] as? String == "challenge" {
+                if result["requiresLogin"] as? Bool == true { throw NodeSeekMessageError.loginRequired }
+                let url = Self.webURL(participantID: participantID)
+                verification.require(url)
+                throw NodeSeekVerificationRequired(url: url)
+            }
             if result["reason"] as? String == "rejected" {
                 throw NodeSeekMessageError.rejected(result["message"] as? String ?? "发送失败，请稍后重试")
             }
@@ -96,9 +102,11 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
 
     // 沿用網站會話提交，避免直接 HTTP 寫入被來源驗證拒絕；不記錄私信內容。
     static let sendScript = """
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch('/api/notification/message/send', {
-        method: 'POST', credentials: 'include',
+        method: 'POST', credentials: 'include', signal: controller.signal,
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
         body: bodyJSON
       });
@@ -110,6 +118,8 @@ final class NodeSeekMessageClient: NodeSeekMessageClientProtocol {
       };
     } catch (_) {
       return { ok: false, reason: 'unknown' };
+    } finally {
+      clearTimeout(timer);
     }
     """
 }

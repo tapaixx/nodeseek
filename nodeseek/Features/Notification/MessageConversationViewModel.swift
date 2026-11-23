@@ -21,6 +21,7 @@ final class MessageConversationViewModel {
     private let profileClient: MessageParticipantLoading?
     private var markedIDs: Set<Int> = []
     private var isSyncingReadState = false
+    private var loadRevision = 0
 
     init(
         participantID: Int,
@@ -52,8 +53,12 @@ final class MessageConversationViewModel {
         }
     }
 
-    func load() async {
-        guard !isLoading, !isSending else { return }
+    func load() async { await load(afterSend: false) }
+
+    private func load(afterSend: Bool) async {
+        guard afterSend || (!isLoading && !isSending) else { return }
+        loadRevision += 1
+        let revision = loadRevision
         isLoading = true
         onChange?()
         var loadedUserID: Int?
@@ -63,17 +68,21 @@ final class MessageConversationViewModel {
             let thread = try await client.loadConversation(participantID: participantID)
             try Task.checkCancellation()
             guard try await accountID() == uid else { throw NodeSeekMessageError.loginRequired }
+            guard revision == loadRevision else { return }
             guard thread.talkTo?.memberID == participantID else { throw NodeSeekMessageError.invalidParticipant }
             currentUserID = uid
             participantName = thread.talkTo?.memberName ?? participantName
             messages = thread.messages(participantID: participantID, currentUserID: uid)
             hasLoaded = true
-            if !deliveryUncertain { errorMessage = nil }
+            if !deliveryUncertain && !isSending { errorMessage = nil }
             loadedUserID = uid
             unread = messages.filter { $0.receiverID == uid && !$0.viewed && !markedIDs.contains($0.id) }.map(\.id)
             if unread.isEmpty { readStateWarning = nil }
         } catch {
-            if !Task.isCancelled { errorMessage = error.localizedDescription }
+            guard revision == loadRevision else { return }
+            if !Task.isCancelled && !deliveryUncertain && !isSending {
+                errorMessage = afterSend ? "私信已发送，更新对话失败，请下拉刷新" : error.localizedDescription
+            }
         }
         // 内容读取完成即可回复，标记已读的网页请求不能继续占用加载状态。
         isLoading = false
@@ -99,7 +108,9 @@ final class MessageConversationViewModel {
 
     func send() async {
         let content = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isSending, !isLoading, !content.isEmpty, !deliveryUncertain else { return }
+        guard hasLoaded, !isSending, !content.isEmpty, !deliveryUncertain else { return }
+        loadRevision += 1
+        isLoading = false
         isSending = true
         errorMessage = nil
         onChange?()
@@ -107,10 +118,10 @@ final class MessageConversationViewModel {
             let uid = try await accountID()
             try await client.send(content: content, participantID: participantID)
             guard try await accountID() == uid else { throw NodeSeekMessageError.loginRequired }
-            draft = ""
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == content { draft = "" }
             isSending = false
-            await load()
-            if errorMessage != nil { errorMessage = "私信已发送，更新对话失败，请下拉刷新" }
+            await load(afterSend: true)
+            return
         } catch {
             deliveryUncertain = (error as? NodeSeekMessageError) == .deliveryUncertain
             errorMessage = error.localizedDescription

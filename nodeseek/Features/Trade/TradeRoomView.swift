@@ -21,6 +21,7 @@ final class TradeRoomModel: ObservableObject {
     let live = TradeLiveEvents()
     private var lastReadID: Int64 = 0
     private var isMarkingRead = false
+    private var liveRefreshPending = false
     let id: Int64
     let api: TradeServing
     @Published var visibility: Int64?
@@ -40,19 +41,19 @@ final class TradeRoomModel: ObservableObject {
     func reload(quiet: Bool = false) async {
         guard !isLoading else { return }
         isLoading = true
-        defer { isLoading = false }
+        defer { finishLoading() }
         do {
             let details = try await api.room(id: id)
             let page = try await api.messages(id: id, before: nil)
             try Task.checkCancellation()
             room = details
+            if messages.isEmpty { hasMore = page.hasMore }
+            merge(page.messages)
             if currentUser == nil { currentUser = try? await api.currentUser() }
             if let workspace, !quiet {
                 quickMessages = ((try? await workspace.read("/api/common/quick-messages", query: [:]))?["quick_messages"].list ?? []).compactMap { $0["content"].text }
                 pins = (try? await workspace.read("/api/common/conversations/\(id)/pins", query: [:]))?["pins"].list ?? []
             }
-            if messages.isEmpty { hasMore = page.hasMore }
-            merge(page.messages)
             if !quiet, !sendNeedsReview, !actionNeedsReview { notice = nil }
         } catch is CancellationError {
         } catch TradeAPIClient.Failure.signInRequired {
@@ -64,10 +65,23 @@ final class TradeRoomModel: ObservableObject {
         } catch {}
     }
 
+    func refreshFromEvent() async {
+        guard isVisible else { return }
+        if isLoading { liveRefreshPending = true; return }
+        await reload(quiet: true)
+    }
+
+    private func finishLoading() {
+        isLoading = false
+        guard liveRefreshPending else { return }
+        liveRefreshPending = false
+        if !Task.isCancelled { Task { [weak self] in await self?.refreshFromEvent() } }
+    }
+
     func loadOlder() async {
         guard !isLoading, hasMore, let previousID = messages.first?.id else { return }
         isLoading = true
-        defer { isLoading = false }
+        defer { finishLoading() }
         do {
             let page = try await api.messages(id: id, before: previousID)
             try Task.checkCancellation()
@@ -405,7 +419,7 @@ struct TradeRoomView: View {
                 if event["type"].text == "typing" || event["type"].text == "read" { return }
                 if let id = event["conversation_id"].id, id != model.id { return }
             }
-            Task { await model.reload(quiet: true) }
+            Task { await model.refreshFromEvent() }
         }
         .task(id: model.isVisible && scenePhase == .active) {
             guard model.isVisible, scenePhase == .active else { return }

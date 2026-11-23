@@ -144,7 +144,8 @@ final class AppMessageCenter {
         }
         if let data = try? JSONEncoder().encode(ledger) { defaults.set(data, forKey: "messages.ledger.\(uid)") }
         guard !incoming.isEmpty, await valid(uid, epoch: version), !Task.isCancelled else { return }
-        NotificationCenter.default.post(name: Self.didReceive, object: self)
+        let peers = Set(incoming.filter { $0.category == "message" }.compactMap(\.participantID))
+        NotificationCenter.default.post(name: Self.didReceive, object: self, userInfo: ["messageParticipantIDs": peers])
         let visible = incoming.filter { !isReading($0) && !hasRemoteReceipt($0) }
         guard alertsEnabled, !visible.isEmpty else { return }
         onNewEvents?(visible)
