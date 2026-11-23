@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class SeekMailClassificationTests: XCTestCase {
+    func testTagShortcutTogglesFilterWithoutChangingFolder() async throws {
+        let transport = fixture()
+        let inbox = makeInbox(transport)
+        let window = try makeWindow(inbox)
+        defer { window.isHidden = true }
+        await mailWaitUntil { !inbox.model.isRefreshing && !inbox.model.availableTags.isEmpty }
+        inbox.model.selectScope(.custom(9))
+        await mailWaitUntil { !inbox.model.isRefreshing }
+        for expected in [Int64(2), nil] {
+            let shortcut = try XCTUnwrap(inbox.view.mailTestView(id: "seek-mail-filter-tag-2") as? UIButton)
+            shortcut.sendActions(for: .touchUpInside)
+            await mailWaitUntil { !inbox.model.isRefreshing }
+            XCTAssertEqual(inbox.model.selectedTag?.id, expected)
+            XCTAssertEqual(inbox.model.scope, .custom(9))
+            let query = transport.requests.last { $0.url?.path.hasSuffix("/mails") == true }?.url?.query
+            XCTAssertEqual(query?.contains("tag_id=2"), expected != nil)
+        }
+    }
     func testListAndDetailShowFolderAndAllTagNames() async throws {
         let transport = fixture()
         let inbox = makeInbox(transport)

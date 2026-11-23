@@ -31,7 +31,7 @@ final class SeekMailClassificationLabel: UILabel {
         isHidden = result.length == 0
     }
 
-    private static func indicatorColor(_ raw: String?) -> UIColor {
+    static func indicatorColor(_ raw: String?) -> UIColor {
         guard let raw, raw.hasPrefix("#"), raw.count == 7, let value = UInt32(raw.dropFirst(), radix: 16) else { return .secondaryLabel }
         // 服务端保存的标签颜色属于分类语义色，仅用于图标；文字始终使用系统动态色。
         let red = CGFloat((value >> 16) & 255) / 255

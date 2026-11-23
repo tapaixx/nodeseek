@@ -10,6 +10,7 @@ final class SeekMailMailboxPickerViewController: UIViewController, UITableViewDa
     private let onSelect: (Int64?) -> Void
     private let table = UITableView(frame: .zero, style: .insetGrouped)
     private let search = UISearchBar()
+    private let scopeControl = UISegmentedControl(items: [SeekMailL10n.text("全部"), SeekMailL10n.text("未读"), SeekMailL10n.text("置顶邮箱")])
     private var groups: [(title: String?, rows: [Int64?])] = []
     private var keyboardDismissCoordinator: KeyboardDismissCoordinator?
 
@@ -44,7 +45,16 @@ final class SeekMailMailboxPickerViewController: UIViewController, UITableViewDa
         table.keyboardDismissMode = .onDrag
         table.rowHeight = UITableView.automaticDimension
         table.estimatedRowHeight = 72
-        let column = UIStackView(arrangedSubviews: [search, table])
+        scopeControl.selectedSegmentIndex = 0
+        scopeControl.accessibilityIdentifier = "seek-mail-picker-scope"
+        scopeControl.addAction(UIAction { [weak self] _ in
+            guard let self, search.searchTextField.markedTextRange == nil else { return }
+            update(query: search.text ?? "")
+        }, for: .valueChanged)
+        let scopeBar = UIStackView(arrangedSubviews: [scopeControl])
+        scopeBar.isLayoutMarginsRelativeArrangement = true
+        scopeBar.directionalLayoutMargins = .init(top: 0, leading: 16, bottom: 8, trailing: 16)
+        let column = UIStackView(arrangedSubviews: [search, scopeBar, table])
         column.axis = .vertical
         column.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(column)
@@ -68,8 +78,15 @@ final class SeekMailMailboxPickerViewController: UIViewController, UITableViewDa
     }
 
     private func update(query: String) {
-        let sections = SeekMailboxPickerSections.make(mailboxes: mailboxes, names: names, counts: counts, recentIDs: recentIDs, query: query)
-        groups = sections.isSearching ? [] : [(nil, [nil])]
+        let filtered = mailboxes.filter { mailbox in
+            switch scopeControl.selectedSegmentIndex {
+            case 1: (counts[mailbox.id] ?? 0) > 0
+            case 2: mailbox.isPinned == true
+            default: true
+            }
+        }
+        let sections = SeekMailboxPickerSections.make(mailboxes: filtered, names: names, counts: counts, recentIDs: recentIDs, query: query)
+        groups = sections.isSearching || scopeControl.selectedSegmentIndex != 0 ? [] : [(nil, [nil])]
         var included = Set<Int64>()
         for (title, rows) in [
             (SeekMailL10n.text("最近使用"), sections.recents),

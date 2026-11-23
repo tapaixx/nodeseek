@@ -5,6 +5,29 @@ import XCTest
 /// 按实际使用规模构造虚构数据，不保存真实 Key、地址或邮件内容。
 @MainActor
 final class SeekMailUsabilityTests: XCTestCase {
+    func testUnreadMailboxFilterIncludesPinnedUnreadAndStaysLocal() async throws {
+        let transport = fixture()
+        transport.mailboxes = #"{"data":[{"id":1,"address":"one@example.org","isPinned":true},{"id":2,"address":"two@example.org"}]}"#
+        let inbox = makeInbox(transport)
+        let window = try makeWindow(inbox)
+        defer { window.isHidden = true }
+        await mailWaitUntil { !inbox.model.isRefreshing }
+        inbox.model.applyUnreadCounts(.init(byMailbox: [1: 2], total: 2))
+        let picker = SeekMailMailboxPickerViewController(model: inbox.model) { _ in }
+        window.rootViewController = UINavigationController(rootViewController: picker)
+        window.layoutIfNeeded()
+        let control = try XCTUnwrap(picker.view.mailTestView(id: "seek-mail-picker-scope") as? UISegmentedControl)
+        let table = try XCTUnwrap(picker.view.mailTestView(id: "seek-mail-picker-list") as? UITableView)
+        let before = transport.requests.count
+        for index in [1, 2] {
+            control.selectedSegmentIndex = index
+            control.sendActions(for: .valueChanged)
+            XCTAssertEqual(table.numberOfSections, 1)
+            XCTAssertEqual(table.numberOfRows(inSection: 0), 1)
+            XCTAssertEqual(picker.tableView(table, cellForRowAt: IndexPath(row: 0, section: 0)).accessibilityIdentifier, "seek-mail-picker-row-1")
+        }
+        XCTAssertEqual(transport.requests.count, before)
+    }
     func testPickerSearchCopyAndSelectionUseLocalMailboxData() async throws {
         let transport = fixture()
         let inbox = makeInbox(transport)

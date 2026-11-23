@@ -125,7 +125,7 @@ final class SeekMailCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func setup() {
-        unreadDot.backgroundColor = .label
+        unreadDot.backgroundColor = .systemBlue
         unreadDot.layer.cornerRadius = 4
         unreadDot.translatesAutoresizingMaskIntoConstraints = false
 
@@ -160,7 +160,7 @@ final class SeekMailCell: UITableViewCell {
         classificationLabel.accessibilityIdentifier = "seek-mail-row-classification"
         let textStack = UIStackView(arrangedSubviews: [topRow, subjectLabel, classificationLabel, previewLabel])
         textStack.axis = .vertical
-        textStack.spacing = 2
+        textStack.spacing = 4
         let row = UIStackView(arrangedSubviews: [textStack, codeButton])
         row.spacing = 10
         row.alignment = .center
@@ -174,8 +174,8 @@ final class SeekMailCell: UITableViewCell {
             unreadDot.centerYAnchor.constraint(equalTo: senderLabel.centerYAnchor),
             row.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
             row.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
-            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10),
-            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10)
+            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
         ])
         separatorInset = UIEdgeInsets(top: 0, left: 24, bottom: 0, right: 0)
     }
@@ -184,7 +184,7 @@ final class SeekMailCell: UITableViewCell {
         classificationLabel.configure(folder: folder, tags: mail.tags)
         unreadDot.isHidden = mail.isRead
         let sender = mail.fromName ?? mail.fromAddress
-        senderLabel.font = SeekMailFont.of(.body).withWeight(mail.isRead ? .regular : .semibold)
+        senderLabel.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: SeekMailFont.of(.body, weight: mail.isRead ? .regular : .semibold))
         senderLabel.attributedText = SeekMailFormat.highlighted(sender, keyword: keyword, font: senderLabel.font, color: .label)
         flagView.isHidden = mail.isFlagged == false
         attachmentView.isHidden = mail.hasAttachments == false
@@ -192,7 +192,8 @@ final class SeekMailCell: UITableViewCell {
         timeLabel.text = SeekMailFormat.listTime(mail.receivedAt)
 
         let subject = mail.subject.isEmpty ? SeekMailL10n.text("（无主题）") : mail.subject
-        let subjectFont = SeekMailFont.of(.subheadline).withWeight(mail.isRead ? .regular : .semibold)
+        subjectLabel.numberOfLines = 2
+        let subjectFont = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: SeekMailFont.of(.subheadline, weight: mail.isRead ? .regular : .semibold))
         subjectLabel.attributedText = SeekMailFormat.highlighted(subject, keyword: keyword, font: subjectFont, color: .label)
 
         let previewFont = SeekMailFont.of(.subheadline)

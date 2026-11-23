@@ -30,6 +30,11 @@ final class SeekMailInboxViewController: UIViewController {
     private var displayedRange: String?
     private let folderTabs = SeekMailFolderTabsView()
     private let classificationButton = UIButton(type: .system)
+    private let classificationRow = UIStackView()
+    private let tagScroller = UIScrollView()
+    private let tagChips = UIStackView()
+    private var renderedTags: [SeekMailTag] = []
+    private var renderedTagID: Int64?
     private let noticeLabel = UILabel()
     private let noticeBar = UIView()
     private let undoToast = SeekMailUndoToast()
@@ -127,6 +132,7 @@ final class SeekMailInboxViewController: UIViewController {
 
     /// 调整「字体大小」后重设字体；单元格、标签和文件夹 tab 都在刷新时按当前字号配置。
     @objc private func textSizeDidChange() {
+        renderedTags = []
         noticeLabel.font = SeekMailFont.of(.footnote)
         undoToast.refreshFonts()
         render()
@@ -369,7 +375,28 @@ final class SeekMailInboxViewController: UIViewController {
         }, for: .valueChanged)
         tableView.refreshControl = refresh
 
-        let stack = UIStackView(arrangedSubviews: [searchContainer, mailboxRow, mailboxTags, folderTabs, classificationButton, noticeBar, tableView])
+        classificationRow.alignment = .center
+        classificationRow.spacing = 6
+        classificationRow.isLayoutMarginsRelativeArrangement = true
+        classificationRow.directionalLayoutMargins = .init(top: 2, leading: 12, bottom: 2, trailing: 8)
+        classificationRow.addArrangedSubview(classificationButton)
+        classificationRow.addArrangedSubview(tagScroller)
+        classificationButton.setContentHuggingPriority(.required, for: .horizontal)
+        tagScroller.showsHorizontalScrollIndicator = false
+        tagScroller.isDirectionalLockEnabled = true
+        tagChips.spacing = 6
+        tagChips.alignment = .center
+        tagChips.translatesAutoresizingMaskIntoConstraints = false
+        tagScroller.addSubview(tagChips)
+        NSLayoutConstraint.activate([
+            tagChips.leadingAnchor.constraint(equalTo: tagScroller.contentLayoutGuide.leadingAnchor),
+            tagChips.trailingAnchor.constraint(equalTo: tagScroller.contentLayoutGuide.trailingAnchor),
+            tagChips.topAnchor.constraint(equalTo: tagScroller.contentLayoutGuide.topAnchor),
+            tagChips.bottomAnchor.constraint(equalTo: tagScroller.contentLayoutGuide.bottomAnchor),
+            tagChips.heightAnchor.constraint(equalTo: tagScroller.frameLayoutGuide.heightAnchor),
+            tagScroller.heightAnchor.constraint(equalTo: classificationRow.layoutMarginsGuide.heightAnchor)
+        ])
+        let stack = UIStackView(arrangedSubviews: [searchContainer, mailboxRow, mailboxTags, folderTabs, classificationRow, noticeBar, tableView])
         stack.axis = .vertical
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
@@ -498,40 +525,75 @@ final class SeekMailInboxViewController: UIViewController {
         mailboxSettingsButton.isHidden = !mailboxTags.isHidden
         mailboxTags.update(tags: model.mailboxTags, selectedID: model.selectedMailboxID,
                            expanded: model.selectionStore.tagsExpanded)
-        var configuration = UIButton.Configuration.plain()
+        var configuration = UIButton.Configuration.tinted()
+        configuration.cornerStyle = .large
         configuration.baseForegroundColor = .label
-        configuration.contentInsets = .zero
-        configuration.image = UIImage(systemName: "chevron.down")
-        configuration.imagePlacement = .trailing
-        configuration.imagePadding = 8
+        configuration.contentInsets = .init(top: 8, leading: 12, bottom: 8, trailing: 12)
+        configuration.image = UIImage(systemName: "tray.2.fill")
+        configuration.imagePadding = 12
         configuration.titleAlignment = .leading
         configuration.titleLineBreakMode = .byTruncatingMiddle
         var title = AttributedString(model.selectionTitle)
         title.font = SeekMailFont.of(.body, weight: .semibold)
         configuration.attributedTitle = title
         let summary = model.selectedMailbox?.address ?? SeekMailL10n.format("%@ 个邮箱", String(model.mailboxes.count))
-        var subtitle = AttributedString(model.canCompose ? summary : summary + " · " + SeekMailL10n.text("仅收信"))
+        let unread = model.selectedMailboxID.flatMap { model.unreadByMailbox[$0] } ?? (model.selectedMailboxID == nil ? model.unreadTotal : nil)
+        let summaryWithCount = unread.map { SeekMailL10n.format("%@，%@ 封未读", summary, $0.formatted()) } ?? summary
+        var subtitle = AttributedString(model.canCompose ? summaryWithCount : summaryWithCount + " · " + SeekMailL10n.text("仅收信"))
         subtitle.font = SeekMailFont.of(.footnote)
         subtitle.foregroundColor = .secondaryLabel
         configuration.attributedSubtitle = subtitle
         mailboxButton.configuration = configuration
         mailboxButton.accessibilityLabel = SeekMailL10n.text("选择邮箱")
-        mailboxButton.accessibilityValue = summary
+        mailboxButton.accessibilityValue = summaryWithCount
         copyMailboxButton.isHidden = model.selectedMailbox == nil
     }
 
     private func updateClassificationFilter() {
-        classificationButton.isHidden = model.availableTags.isEmpty && model.selectedTag == nil && model.folders.isEmpty
+        let available = model.availableTags
+        classificationRow.isHidden = available.isEmpty && model.selectedTag == nil && model.folders.isEmpty
+        classificationButton.isHidden = classificationRow.isHidden
         var configuration = UIButton.Configuration.plain()
         configuration.baseForegroundColor = .label
         configuration.image = UIImage(systemName: "line.3.horizontal.decrease.circle")
         configuration.imagePadding = 6
-        var text = AttributedString(SeekMailL10n.format("标签：%@", model.selectedTag?.name ?? SeekMailL10n.text("全部标签")))
+        var text = AttributedString(SeekMailL10n.text("筛选"))
         text.font = SeekMailFont.of(.footnote)
         configuration.attributedTitle = text
         configuration.titleLineBreakMode = .byWordWrapping
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 4, bottom: 8, trailing: 4)
         classificationButton.configuration = configuration
+        classificationButton.accessibilityValue = model.selectedTag?.name ?? SeekMailL10n.text("全部标签")
+        var visibleTags = Array(available.prefix(6))
+        if let selected = model.selectedTag, !visibleTags.contains(where: { $0.id == selected.id }) { visibleTags.insert(selected, at: 0) }
+        if renderedTags != visibleTags || renderedTagID != model.selectedTag?.id {
+            renderedTags = visibleTags
+            renderedTagID = model.selectedTag?.id
+            tagChips.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            for tag in visibleTags {
+                let selected = tag.id == renderedTagID
+                let button = UIButton(type: .system)
+                var chip = UIButton.Configuration.tinted()
+                chip.cornerStyle = .capsule
+                chip.baseForegroundColor = .label
+                chip.background.backgroundColor = selected ? .tertiarySystemFill : .secondarySystemBackground
+                chip.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "tag.fill")
+                chip.imageColorTransformer = UIConfigurationColorTransformer { _ in SeekMailClassificationLabel.indicatorColor(tag.color) }
+                chip.imagePadding = 5
+                chip.title = tag.name
+                chip.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+                    var updated = attributes
+                    updated.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: SeekMailFont.of(.caption1))
+                    return updated
+                }
+                button.configuration = chip
+                button.accessibilityIdentifier = "seek-mail-filter-tag-\(tag.id)"
+                button.accessibilityTraits = selected ? [.button, .selected] : .button
+                button.addAction(UIAction { [weak self] _ in self?.model.selectTag(selected ? nil : tag) }, for: .touchUpInside)
+                button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+                tagChips.addArrangedSubview(button)
+            }
+        }
         let folders = model.scopes.map { scope in
             UIAction(title: model.title(for: scope), image: UIImage(systemName: "folder"), state: model.scope == scope ? .on : .off) { [weak self] _ in
                 self?.model.selectScope(scope)

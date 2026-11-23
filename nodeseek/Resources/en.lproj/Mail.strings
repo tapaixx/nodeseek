@@ -14,6 +14,7 @@
 "主题和正文不能都为空" = "Enter a subject or message.";
 "之前保存的 Key 已失效，请重新粘贴" = "Your saved key has expired. Paste a new one.";
 "全部" = "All";
+"筛选" = "Filter";
 "全部邮箱" = "All mailboxes";
 "写信" = "Compose";
 "写信和回复（可选，只有 seek.li 地址能发信）" = "Send and reply (optional; seek.li addresses only)";
