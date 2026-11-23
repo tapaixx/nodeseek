@@ -455,7 +455,9 @@ struct TradeRoomView: View {
     }
 
     private func messageRow(_ message: TradeMessage) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let outgoing = message.sender != nil && message.sender?.id == model.currentUser?.id
+        let replyAllowed = model.room?.access.canWrite == true && ["text", "image"].contains(message.type ?? "") && message.hidden != true && message.deleted != true
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top) {
                 Text(message.sender?.username ?? TradeText.text("系统消息")).fontWeight(.medium)
                 if let sender = message.sender,
@@ -490,7 +492,17 @@ struct TradeRoomView: View {
                 Text(stamp).font(.caption2).monospacedDigit().foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+        .padding(12)
+        .background(outgoing ? Color.accentColor.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
+        .listRowSeparator(.hidden).listRowBackground(Color.clear)
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            if replyAllowed {
+                Button { model.reply = message; model.quoteText = nil; composerFocused = true } label: {
+                    Label(TradeText.text("回复消息"), systemImage: "arrowshape.turn.up.left.fill")
+                }.tint(.indigo)
+            }
+        }
         .contextMenu {
             if let text = message.content, ["text", "image"].contains(message.type ?? ""), message.deleted != true, message.hidden != true {
                 Button { UIPasteboard.general.string = text } label: { Label(TradeText.text("复制消息"), systemImage: "doc.on.doc") }

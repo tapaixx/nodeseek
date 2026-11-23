@@ -521,4 +521,8 @@
 "积分数量超过可用额度。" = "The points amount exceeds the available limit.";
 "查看大图" = "View full image";
 "退出交易账户" = "Sign out of trading";
+"最近的交易" = "Recent trade";
+"浏览托管任务" = "Browse listings";
+"查看交易记录" = "Explore trade records";
+"应用筛选" = "Apply filters";
 "将结束交易系统会话，论坛登录仍由论坛账户设置管理。" = "This ends your trading session. Forum sign-in is managed separately in forum account settings.";

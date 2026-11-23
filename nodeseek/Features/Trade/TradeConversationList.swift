@@ -15,6 +15,7 @@ struct TradeConversationList: View {
     @State private var from = Date().addingTimeInterval(-30 * 86400)
     @State private var to = Date()
     @State private var showFilters = false
+    @State private var filterDraft = TradeFilterDraft()
     @State private var operation: TradeOperation?
     @State private var invitation = false
     @State private var userSearch = false
@@ -41,24 +42,25 @@ struct TradeConversationList: View {
                     Button(TradeText.text("通过邀请加入")) { invitation = true }
                 } label: { Label(TradeText.text("新建"), systemImage: "plus.circle") }
                 Button(TradeText.text("交易与私聊申请")) { open(.init(kind: "requests", title: TradeText.text("交易与私聊申请"))) }
-                DisclosureGroup(TradeText.text("过滤聊天"), isExpanded: $showFilters) {
-                    Picker(TradeText.text("进行状态"), selection: $status) {
-                        Text(TradeText.text("全部")).tag(""); Text(TradeText.text("进行中")).tag("open"); Text(TradeText.text("已结束")).tag("closed")
-                    }
-                    Picker(TradeText.text("类型"), selection: $type) {
-                        Text(TradeText.text("全部")).tag(""); Text(TradeText.text("群聊")).tag("trade"); Text(TradeText.text("私聊")).tag("private")
-                    }
-                    TradeParticipantPicker(api: api, selectedID: $participant)
-                    Toggle(TradeText.text("按日期筛选"), isOn: $dateFilter)
-                    if dateFilter {
-                        DatePicker(TradeText.text("开始日期"), selection: $from, displayedComponents: .date)
-                        DatePicker(TradeText.text("结束日期"), selection: $to, in: from..., displayedComponents: .date)
-                    }
-                    Button(TradeText.text("清除筛选")) { status = ""; type = ""; participant = ""; query = ""; dateFilter = false }
+                Button {
+                    filterDraft = .init(status: status, type: type, participant: participant, dateFilter: dateFilter, from: from, to: to)
+                    showFilters = true
+                } label: {
+                    HStack {
+                        Label(TradeText.text("过滤聊天"), systemImage: "line.3.horizontal.decrease.circle")
+                        Spacer()
+                        Text(TradeText.text(status == "open" ? "进行中" : status == "closed" ? "已结束" : "全部")).foregroundStyle(.secondary)
+                    }.frame(minHeight: 44)
                 }
             }
             TradeFailureView(model: model) { Task { await reload() } }
-            if model.data["conversations"].list.isEmpty, !model.loading { Text(TradeText.text("暂无聊天")) }
+            if model.data["conversations"].list.isEmpty, !model.loading, model.error == nil {
+                VStack(spacing: 10) {
+                    Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle)
+                    Text(TradeText.text("暂无聊天")).font(.headline)
+                    Button(TradeText.text("新建交易")) { operation = TradeForms.create(agents: home.agents, userRole: home.user?.role) }.buttonStyle(.bordered)
+                }.frame(maxWidth: .infinity).padding(.vertical, 24)
+            }
             ForEach(Array(model.data["conversations"].list.enumerated()), id: \.offset) { _, conversation in
                 Button { if let id = conversation["id"].id { home.onOpen?(id) } } label: {
                     VStack(alignment: .leading, spacing: 6) {
@@ -83,6 +85,34 @@ struct TradeConversationList: View {
             do { try await Task.sleep(nanoseconds: 250_000_000); try Task.checkCancellation(); await reload() } catch {}
         }
         .refreshable { await reload() }
+        .sheet(isPresented: $showFilters) {
+            NavigationView {
+                Form {
+                    Picker(TradeText.text("进行状态"), selection: $filterDraft.status) {
+                        Text(TradeText.text("全部")).tag(""); Text(TradeText.text("进行中")).tag("open"); Text(TradeText.text("已结束")).tag("closed")
+                    }
+                    Picker(TradeText.text("类型"), selection: $filterDraft.type) {
+                        Text(TradeText.text("全部")).tag(""); Text(TradeText.text("群聊")).tag("trade"); Text(TradeText.text("私聊")).tag("private")
+                    }
+                    TradeParticipantPicker(api: api, selectedID: $filterDraft.participant)
+                    Toggle(TradeText.text("按日期筛选"), isOn: $filterDraft.dateFilter)
+                    if filterDraft.dateFilter {
+                        DatePicker(TradeText.text("开始日期"), selection: $filterDraft.from, displayedComponents: .date)
+                            .onChange(of: filterDraft.from) { if filterDraft.to < $0 { filterDraft.to = $0 } }
+                        DatePicker(TradeText.text("结束日期"), selection: $filterDraft.to, in: filterDraft.from..., displayedComponents: .date)
+                    }
+                    Button(TradeText.text("清除筛选")) { filterDraft = TradeFilterDraft() }
+                }.navigationTitle(TradeText.text("过滤聊天")).navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button(TradeText.text("取消")) { showFilters = false } }
+                        ToolbarItem(placement: .confirmationAction) { Button(TradeText.text("应用筛选")) {
+                            status = filterDraft.status; type = filterDraft.type; participant = filterDraft.participant
+                            dateFilter = filterDraft.dateFilter; from = filterDraft.from; to = filterDraft.to
+                            showFilters = false
+                        } }
+                    }
+            }.navigationViewStyle(.stack).tradeTypography()
+        }
         .task(id: scenePhase == .active && home.workspaceVisible) {
             guard scenePhase == .active, home.workspaceVisible else { live.stop(); return }
             live.start()
@@ -107,6 +137,15 @@ struct TradeConversationList: View {
         }
     }
     private func reload() async { await model.load("/api/common/conversations", query: filters) }
+}
+
+private struct TradeFilterDraft {
+    var status = ""
+    var type = ""
+    var participant = ""
+    var dateFilter = false
+    var from = Date().addingTimeInterval(-30 * 86400)
+    var to = Date()
 }
 
 struct TradeParticipantPicker: View {
