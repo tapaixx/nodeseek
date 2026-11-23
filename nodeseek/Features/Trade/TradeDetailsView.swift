@@ -15,6 +15,18 @@ struct TradeDetailsView: View {
     let room: TradeRoom
     var body: some View {
         if let trade = room.trade {
+            if let risk = room.risk, !risk["users"].list.isEmpty || !risk["hits"].list.isEmpty {
+                Label(TradeText.text("风险提醒"), systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                ForEach(Array((risk["users"].list + risk["hits"].list).enumerated()), id: \.offset) { _, item in
+                    Text((item["username"].text ?? item["value"].text ?? "") + " · " + (item["reason"].text ?? TradeText.text("被标记为有风险")))
+                }
+            }
+            if let settlement = trade.settlement {
+                TradeInfoRow(title: TradeText.text("买家应付"), value: TradePresentation.money(settlement.buyerPays))
+                TradeInfoRow(title: TradeText.text("卖家实收"), value: TradePresentation.money(settlement.sellerGets))
+                if let text = settlement.buyerText { Text(text).font(.footnote).foregroundStyle(.secondary) }
+                if let text = settlement.sellerText { Text(text).font(.footnote).foregroundStyle(.secondary) }
+            }
             TradeInfoRow(title: TradeText.text("交易编号"), value: "#\(trade.id)")
             TradeInfoRow(title: TradeText.text("物品价格"), value: TradePresentation.money(trade.price))
             if let note = trade.priceNote, !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }

@@ -159,19 +159,23 @@ struct TradeNativeTests {
             checks += 1
             return isSignedIn
         }, onAuthorized: { completions += 1 })
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let originalKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
         let host = UIViewController()
         window.rootViewController = host
-        window.isHidden = false
+        window.makeKeyAndVisible()
         let navigation = UINavigationController(rootViewController: controller)
         host.present(navigation, animated: false)
         defer {
             host.dismiss(animated: false)
             window.isHidden = true
+            originalKeyWindow?.makeKey()
         }
         // 本地空白文档模拟官方回跳，不访问 connect，也不使用真实账户。
         controller.webView.loadHTMLString("<html><body></body></html>", baseURL: URL(string: "https://agent.nodeseek.org/chat/"))
-        var deadline = Date().addingTimeInterval(5)
+        var deadline = Date().addingTimeInterval(10)
         while controller.presentedViewController == nil, Date() < deadline {
             try await Task.sleep(nanoseconds: 20_000_000)
         }

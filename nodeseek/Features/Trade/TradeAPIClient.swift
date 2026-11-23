@@ -11,6 +11,7 @@ enum TradeText {
 struct TradeUser: Decodable, Identifiable, Equatable {
     let id: Int64
     let username: String
+    var role: String? = nil
 }
 
 struct TradeConversation: Decodable, Identifiable {
@@ -24,6 +25,8 @@ struct TradeConversation: Decodable, Identifiable {
     var unread: Int? = nil
     var myRole: String? = nil
     var createdAt: String? = nil
+    var type: String? = nil
+    var isPublic: Bool? = nil
     var displayTitle: String { title.flatMap { $0.isEmpty ? nil : $0 } ?? TradeText.text("未命名交易") }
 }
 
@@ -37,7 +40,12 @@ struct TradeAmount: Decodable, Equatable {
 }
 
 struct TradeRoom: Decodable {
-    struct Access: Decodable, Equatable { let canWrite: Bool; let role: String? }
+    struct Access: Decodable, Equatable {
+        let canWrite: Bool; let role: String?
+        var canModerate: Bool? = nil
+        var canDeleteOthers: Bool? = nil
+        var canPin: Bool? = nil
+    }
     struct Progress: Decodable, Equatable {
         let id: Int64
         let stage: String
@@ -61,8 +69,24 @@ struct TradeRoom: Decodable {
         var proposal: Proposal? = nil
         var escrowTaskId: Int64? = nil
         var redPacket: RedPacket? = nil
+        var settlement: Settlement? = nil
+        var feePolicy: FeePolicy? = nil
+        var resetAt: String? = nil
+        var brandId: Int64? = nil
     }
-    struct Proposal: Decodable, Equatable { var kind: String? = nil }
+    struct Settlement: Decodable, Equatable {
+        var buyerFee: TradeAmount? = nil; var sellerFee: TradeAmount? = nil
+        var buyerPays: TradeAmount? = nil; var sellerGets: TradeAmount? = nil
+        var buyerText: String? = nil; var sellerText: String? = nil
+    }
+    struct FeePolicy: Decodable, Equatable {
+        var agentName: String? = nil; var rate: TradeAmount? = nil
+        var min: TradeAmount? = nil; var cap: TradeAmount? = nil
+    }
+    struct Proposal: Decodable, Equatable {
+        var kind: String? = nil; var by: Int64? = nil
+        var buyerAt: String? = nil; var sellerAt: String? = nil; var agentAt: String? = nil
+    }
     struct RedPacket: Decodable, Equatable { var amount: TradeAmount? = nil }
     struct Step: Decodable, Equatable {
         let key: String
@@ -79,6 +103,8 @@ struct TradeRoom: Decodable {
     let access: Access
     let trade: Progress?
     let members: [Member]?
+    var risk: TradeValue? = nil
+    var publishRequest: TradeValue? = nil
 
     var canInvite: Bool {
         let roles = Set(["buyer", "seller", "agent"])
@@ -88,7 +114,10 @@ struct TradeRoom: Decodable {
 }
 
 struct TradeMessage: Decodable, Identifiable {
-    struct Reply: Decodable { let id: Int64; var content: String? = nil; var sender: TradeUser? = nil }
+    struct Reply: Decodable {
+        let id: Int64; var content: String? = nil; var sender: TradeUser? = nil
+        var hidden: Bool? = nil; var deleted: Bool? = nil
+    }
     let id: Int64
     let sender: TradeUser?
     let content: String?
@@ -96,6 +125,17 @@ struct TradeMessage: Decodable, Identifiable {
     let type: String?
     var replyTo: Reply? = nil
     var replyToId: Int64? = nil
+    var imageUrl: String? = nil
+    var visibleTo: [TradeUser]? = nil
+    var hidden: Bool? = nil
+    var deleted: Bool? = nil
+    var editCount: Int? = nil
+    var editsVisible: Bool? = nil
+    var pinnedAt: String? = nil
+    var reactions: [TradeValue]? = nil
+    var quoteText: String? = nil
+    var deletionVisible: Bool? = nil
+    var meta: TradeValue? = nil
 }
 
 struct TradeInvitation: Decodable {
@@ -152,12 +192,14 @@ final class TradeAPIClient: TradeServing {
 
     enum Failure: LocalizedError, Equatable {
         case signInRequired, invalidResponse, rejected
+        case server(String)
 
         var errorDescription: String? {
             switch self {
             case .signInRequired: TradeText.text("请先登录交易系统")
             case .invalidResponse: TradeText.text("无法读取交易数据，请稍后重试。")
             case .rejected: TradeText.text("交易系统未接受此请求，请刷新后确认结果。")
+            case .server(let message): message
             }
         }
     }
@@ -177,7 +219,7 @@ final class TradeAPIClient: TradeServing {
     private struct CreateBody: Encodable { let role: String; let title: String; let agentUserId: Int64 }
     private struct MessageBody: Encodable { let content: String; var replyToId: Int64? = nil }
     private struct InviteResponse: Decodable { let token: String }
-    private struct ErrorResponse: Decodable { let code: String? }
+    private struct ErrorResponse: Decodable { let code: String?; let error: String? }
 
     private let transport: Transport
     private let cookies: () async -> [HTTPCookie]
@@ -337,7 +379,7 @@ final class TradeAPIClient: TradeServing {
         if !cookies.isEmpty { await storeCookies(cookies) }
     }
 
-    private func request<T: Decodable>(_ type: T.Type, path: String, method: String = "GET", body: Data? = nil, mayRefreshSignature: Bool = true) async throws -> T {
+    func request<T: Decodable>(_ type: T.Type, path: String, method: String = "GET", body: Data? = nil, mayRefreshSignature: Bool = true, contentType: String = "application/json") async throws -> T {
         let signing = try await signing()
         var request = await makeRequest(path: path, method: method)
         let stamp = String(Int64(now().timeIntervalSince1970 * 1_000 + signing.timeOffset))
@@ -348,7 +390,7 @@ final class TradeAPIClient: TradeServing {
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: ""), forHTTPHeaderField: "X-Sign")
         if let body {
             request.httpBody = body
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await transport(request)
         await captureCookies(from: response)
@@ -364,13 +406,26 @@ final class TradeAPIClient: TradeServing {
             }
             throw Failure.signInRequired
         }
-        guard (200...299).contains(status) else { throw Failure.rejected }
-        guard let value = try? decoder.decode(type, from: data) else { throw Failure.invalidResponse }
+        guard (200...299).contains(status) else {
+            if let message = (try? decoder.decode(ErrorResponse.self, from: data))?.error,
+               !message.isEmpty, message.count <= 500 { throw Failure.server(message) }
+            throw Failure.rejected
+        }
+        if type == TradeImageResponse.self {
+            guard data.count <= 20 * 1024 * 1024 else { throw Failure.invalidResponse }
+            return TradeImageResponse(data: data) as! T
+        }
+        // 删除等写入可能返回 204；空成功响应仍算成功，避免误导用户重复提交。
+        let payload = data.isEmpty ? Data("{}".utf8) : data
+        if type == TradeValue.self {
+            return try JSONDecoder().decode(type, from: payload)
+        }
+        guard let value = try? decoder.decode(type, from: payload) else { throw Failure.invalidResponse }
         return value
     }
 }
 
-private final class TradeRedirectPolicy: NSObject, URLSessionTaskDelegate {
+final class TradeRedirectPolicy: NSObject, URLSessionTaskDelegate {
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                                 newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)

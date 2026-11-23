@@ -16,6 +16,8 @@ final class TradeHomeModel: ObservableObject {
     }
 
     let api: TradeServing
+    @Published var workspaceVisible = false
+    @Published private(set) var user: TradeUser?
     @Published private(set) var state = State.loading
     @Published private(set) var conversations: [TradeConversation] = []
     @Published private(set) var agents: [TradeUser] = []
@@ -24,6 +26,7 @@ final class TradeHomeModel: ObservableObject {
     @Published private(set) var isCheckingSignIn = false
     var onLogin: (() -> Void)?
     var onOpen: ((Int64) -> Void)?
+    var onDestination: ((TradeDestination) -> Void)?
     @Published var query = ""
     @Published var filter = Filter.all
     @Published private(set) var agentFailure = false
@@ -66,6 +69,7 @@ final class TradeHomeModel: ObservableObject {
                 clearSession()
                 return
             }
+            self.user = user
             async let rooms = api.conversations()
             async let availableAgents = try? api.agents()
             let result = try await (rooms, availableAgents)
@@ -100,22 +104,28 @@ final class TradeHomeModel: ObservableObject {
     }
 
     private func clearSession() {
+        user = nil
         conversations = []
         agents = []
         state = .signedOut
     }
 }
 
-final class TradeHomeViewController: UIHostingController<TradeHomeView> {
+final class TradeHomeViewController: UIHostingController<AnyView> {
     private let model: TradeHomeModel
 
     init(api: TradeServing? = nil) {
         let model = TradeHomeModel(api: api ?? TradeAPIClient())
         self.model = model
-        super.init(rootView: TradeHomeView(model: model))
+        if let workspace = model.api as? TradeWorkspaceServing {
+            super.init(rootView: AnyView(TradeWorkspaceView(home: model, api: workspace)))
+        } else {
+            super.init(rootView: AnyView(TradeHomeView(model: model)))
+        }
         title = TradeText.text("交易系统")
         model.onLogin = { [weak self] in self?.openAuthorization() }
         model.onOpen = { [weak self] id in self?.openRoom(id) }
+        model.onDestination = { [weak self] destination in self?.openDestination(destination) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -123,6 +133,15 @@ final class TradeHomeViewController: UIHostingController<TradeHomeView> {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         Task { await model.load() }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        model.workspaceVisible = true
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        model.workspaceVisible = false
     }
 
     private func openAuthorization() {
@@ -135,9 +154,25 @@ final class TradeHomeViewController: UIHostingController<TradeHomeView> {
         present(UINavigationController(rootViewController: authorization), animated: true)
     }
 
+    private func openDestination(_ destination: TradeDestination) {
+        guard let api = model.api as? TradeWorkspaceServing else { return }
+        let page = UIHostingController(rootView: TradeBusinessPage(destination: destination, api: api, home: model) { [weak self] target in
+            self?.openDestination(target)
+        })
+        page.title = destination.title
+        pushAfterDismissing(page)
+    }
+
+    private func pushAfterDismissing(_ page: UIViewController) {
+        guard let navigationController else { return }
+        if navigationController.presentedViewController != nil {
+            navigationController.dismiss(animated: true) { navigationController.pushViewController(page, animated: true) }
+        } else { navigationController.pushViewController(page, animated: true) }
+    }
+
     private func openRoom(_ id: Int64) {
         let room = TradeRoomViewController(id: id, api: model.api)
-        navigationController?.pushViewController(room, animated: true)
+        pushAfterDismissing(room)
     }
 }
 

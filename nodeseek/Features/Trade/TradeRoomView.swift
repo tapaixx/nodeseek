@@ -18,10 +18,19 @@ final class TradeRoomModel: ObservableObject {
     @Published private(set) var actionNeedsReview = false
     @Published private(set) var isLoading = false
 
+    let live = TradeLiveEvents()
     private var lastReadID: Int64 = 0
     private var isMarkingRead = false
-    private let id: Int64
-    private let api: TradeServing
+    let id: Int64
+    let api: TradeServing
+    @Published var visibility: Int64?
+    private var pendingAttachmentID: TradeValue?
+    @Published var attachment: Data?
+    @Published var quoteText: String?
+    @Published private(set) var currentUser: TradeUser?
+    @Published private(set) var quickMessages: [String] = []
+    @Published private(set) var pins: [TradeValue] = []
+    var workspace: TradeWorkspaceServing? { api as? TradeWorkspaceServing }
 
     init(id: Int64, api: TradeServing) {
         self.id = id
@@ -37,6 +46,11 @@ final class TradeRoomModel: ObservableObject {
             let page = try await api.messages(id: id, before: nil)
             try Task.checkCancellation()
             room = details
+            if currentUser == nil { currentUser = try? await api.currentUser() }
+            if let workspace, !quiet {
+                quickMessages = ((try? await workspace.read("/api/common/quick-messages", query: [:]))?["quick_messages"].list ?? []).compactMap { $0["content"].text }
+                pins = (try? await workspace.read("/api/common/conversations/\(id)/pins", query: [:]))?["pins"].list ?? []
+            }
             if messages.isEmpty { hasMore = page.hasMore }
             merge(page.messages)
             if !quiet, !sendNeedsReview, !actionNeedsReview { notice = nil }
@@ -73,15 +87,40 @@ final class TradeRoomModel: ObservableObject {
 
     func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard room?.access.canWrite == true, !text.isEmpty, !isSending, !sendNeedsReview else { return }
+        guard room?.access.canWrite == true, (!text.isEmpty || attachment != nil), !isSending, !sendNeedsReview else { return }
         isSending = true
         defer { isSending = false }
         do {
             let sent: TradeMessage
-            if let reply { sent = try await api.send(text, to: id, replyingTo: reply.id) }
+            if let workspace, attachment != nil || visibility != nil || quoteText != nil {
+                var fields: [String: TradeValue] = [:]
+                if !text.isEmpty { fields["content"] = .string(text) }
+                if let reply { fields["reply_to_id"] = .id(reply.id) }
+                if let quoteText { fields["quote_text"] = .string(quoteText) }
+                if let visibility {
+                    let role = room?.access.role
+                    let allowed = room?.members?.contains { $0.id == visibility && (role == "agent" ? ["buyer", "seller"].contains($0.role) : $0.role == "agent") } == true
+                    guard allowed else { throw TradeAPIClient.Failure.rejected }
+                    fields["visible_to"] = .object(["user_ids": .array([.id(visibility)])])
+                }
+                if let attachment {
+                    if let pendingAttachmentID { fields["attachment_id"] = pendingAttachmentID }
+                    else {
+                        let upload = try await workspace.uploadImage(attachment, conversationID: id)
+                        guard !upload["id"].isNull else { throw TradeAPIClient.Failure.invalidResponse }
+                        pendingAttachmentID = upload["id"]
+                        fields["attachment_id"] = upload["id"]
+                    }
+                }
+                let result = try await workspace.write("/api/common/conversations/\(id)/messages", method: "POST", fields: fields)
+                sent = try TradeAPIClient.decodeWorkspaceMessage(result["message"])
+            } else if let reply { sent = try await api.send(text, to: id, replyingTo: reply.id) }
             else { sent = try await api.send(text, to: id) }
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
             reply = nil
+            attachment = nil
+            pendingAttachmentID = nil
+            quoteText = nil
             merge([sent])
             notice = nil
         } catch TradeAPIClient.Failure.signInRequired {
@@ -105,6 +144,11 @@ final class TradeRoomModel: ObservableObject {
         } catch {
             // 已读同步失败不阻塞聊天发送，下一次滚动或刷新后重试。
         }
+    }
+
+    func selectAttachment(_ data: Data?) {
+        attachment = data
+        pendingAttachmentID = nil
     }
 
     func acknowledgeSend() {
@@ -221,6 +265,9 @@ struct TradeRoomView: View {
     @State private var lastVisibleMessage: Int64?
     @State private var viewport = CGRect.zero
     @State private var scrolledInitially = false
+    @State private var messageOperation: TradeOperation?
+    @State private var history: TradeValue?
+    @State private var imagePicker = false
 
     private var shownMessages: [TradeMessage] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -248,7 +295,9 @@ struct TradeRoomView: View {
                         DisclosureGroup(TradeText.text("交易信息与进度"), isExpanded: $detailsExpanded) {
                             TradeDetailsView(room: room)
                         }
-                        if room.canEditTerms {
+                        if let api = model.workspace {
+                            TradeAdvancedTermsView(api: api, room: room) { await model.reload(quiet: true) }
+                        } else if room.canEditTerms {
                             Button(TradeText.text("编辑交易信息")) { editingTerms = true }
                                 .disabled(model.isMutating || model.actionNeedsReview)
                         }
@@ -263,6 +312,9 @@ struct TradeRoomView: View {
                                 .disabled(model.isMutating || model.actionNeedsReview)
                         }
                         if model.isMutating { ProgressView() }
+                        if let api = model.workspace {
+                            TradeRoomManagement(api: api, roomID: model.id, room: room, currentUser: model.currentUser) { await model.reload(quiet: true) }
+                        }
                     }
                 }
                 if let notice = model.notice {
@@ -281,6 +333,15 @@ struct TradeRoomView: View {
                     if model.isLoading { ProgressView() }
                     else { Button(TradeText.text("重试")) { Task { await model.reload() } } }
                 } else {
+                    if !model.pins.isEmpty {
+                        Section(TradeText.text("置顶消息")) {
+                            ForEach(Array(model.pins.enumerated()), id: \.offset) { _, pin in
+                                Button(pin["content"].text ?? TradeText.text("消息")) {
+                                    if let id = pin["id"].id { proxy.scrollTo(id, anchor: .center) }
+                                }
+                            }
+                        }
+                    }
                     Section(TradeText.text("交易群聊")) {
                         if model.hasMore {
                             Button(TradeText.text("加载更早的消息")) {
@@ -338,8 +399,18 @@ struct TradeRoomView: View {
             }
         }
         .tradeTypography()
+        .onReceive(NotificationCenter.default.publisher(for: TradeLiveEvents.didReceive)) { notification in
+            guard model.isVisible, scenePhase == .active else { return }
+            if let event = notification.userInfo?["event"] as? TradeValue {
+                if event["type"].text == "typing" || event["type"].text == "read" { return }
+                if let id = event["conversation_id"].id, id != model.id { return }
+            }
+            Task { await model.reload(quiet: true) }
+        }
         .task(id: model.isVisible && scenePhase == .active) {
             guard model.isVisible, scenePhase == .active else { return }
+            model.live.start(conversationID: model.id)
+            defer { model.live.stop() }
             await model.reload()
             if let id = lastVisibleMessage { await model.markRead(through: id) }
             while !Task.isCancelled {
@@ -361,6 +432,13 @@ struct TradeRoomView: View {
                 Text(action.explanation(in: room) + "\n\n" + actionSummary(room))
             }
         }
+        .sheet(item: $messageOperation, onDismiss: { Task { await model.reload(quiet: true) } }) { operation in
+            if let api = model.workspace { TradeOperationView(operation: operation, api: api) { _ in } }
+        }
+        .sheet(isPresented: Binding(get: { history != nil }, set: { if !$0 { history = nil } })) {
+            if let history { TradeMessageHistory(data: history) }
+        }
+        .sheet(isPresented: $imagePicker) { TradeImagePicker { model.selectAttachment($0) } }
         .sheet(isPresented: $editingTerms) {
             if let room = model.room { TradeTermsView(model: model, room: room).tradeTypography() }
         }
@@ -388,29 +466,71 @@ struct TradeRoomView: View {
             if let reply = message.replyTo {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(reply.sender?.username ?? TradeText.text("回复消息")).font(.caption)
-                    Text(reply.content ?? "#\(reply.id)").lineLimit(2)
+                    Text(reply.hidden == true ? TradeText.text("此消息的内容仅对指定参与者可见。") : reply.deleted == true && reply.content == nil ? TradeText.text("消息已删除") : message.quoteText ?? reply.content ?? "#\(reply.id)").lineLimit(2)
                 }.foregroundStyle(.secondary).padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
             }
+            if let recipients = message.visibleTo, !recipients.isEmpty {
+                Label(TradeText.text("私密消息") + " · " + recipients.map(\.username).joined(separator: "、"), systemImage: "lock.fill")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text(messageText(message)).textSelection(.enabled)
+            if message.type == "deleted", let content = message.content,
+               model.room?.access.canModerate == true || message.deletionVisible == true {
+                Text(content).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+            if message.hidden != true, message.type != "private_hidden", message.type != "deleted", message.deleted != true, let path = message.imageUrl, let api = model.workspace {
+                TradeRemoteImage(api: api, path: path)
+            }
+            if let reactions = message.reactions, !reactions.isEmpty {
+                Text(reactions.compactMap { ($0["emoji"].text ?? "") + " " + ($0["count"].text ?? "") }.joined(separator: "  ")).font(.caption)
+            }
             if let stamp = TradePresentation.timestamp(message.createdAt) {
                 Text(stamp).font(.caption2).monospacedDigit().foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
         .contextMenu {
-            if let text = message.content, message.type != "deleted" {
+            if let text = message.content, ["text", "image"].contains(message.type ?? ""), message.deleted != true, message.hidden != true {
                 Button { UIPasteboard.general.string = text } label: { Label(TradeText.text("复制消息"), systemImage: "doc.on.doc") }
                 if model.room?.access.canWrite == true {
-                    Button { model.reply = message; composerFocused = true } label: { Label(TradeText.text("回复消息"), systemImage: "arrowshape.turn.up.left") }
+                    Button { model.reply = message; model.quoteText = nil; composerFocused = true } label: { Label(TradeText.text("回复消息"), systemImage: "arrowshape.turn.up.left") }
+                    Button { model.reply = message; model.quoteText = text; composerFocused = true } label: { Label(TradeText.text("引用消息"), systemImage: "text.quote") }
                 }
+            }
+            if let room = model.room, let api = model.workspace {
+                TradeMessageActions(message: message, room: room, currentUser: model.currentUser, api: api, conversationID: model.id,
+                                    operation: $messageOperation, history: $history)
             }
         }
     }
 
     private func composer(proxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            if model.workspace != nil {
+                HStack {
+                    Menu {
+                        Button(TradeText.text("添加图片")) { imagePicker = true }
+                        ForEach(Array(model.quickMessages.enumerated()), id: \.offset) { _, text in
+                            Button(text) { model.draft = text }
+                        }
+                    } label: { Label(TradeText.text("快捷操作"), systemImage: "plus.circle") }.font(.callout)
+                    Spacer()
+                    Menu {
+                        Button(TradeText.text("对所有人可见")) { model.visibility = nil }
+                        ForEach((model.room?.members ?? []).filter { member in
+                            model.room?.access.role == "agent" ? ["buyer", "seller"].contains(member.role) : member.role == "agent"
+                        }, id: \.id) { member in
+                            if let id = member.id { Button(member.username ?? TradePresentation.role(member.role)) { model.visibility = id } }
+                        }
+                    } label: { Label(TradeText.text(model.visibility == nil ? "对所有人可见" : "私密发送"), systemImage: model.visibility == nil ? "person.2" : "lock") }.font(.caption)
+                }
+                if let data = model.attachment, let image = UIImage(data: data) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 100).accessibilityLabel(TradeText.text("已选择图片"))
+                    HStack { Label(TradeText.text("已选择图片"), systemImage: "photo"); Spacer(); Button(TradeText.text("移除")) { model.selectAttachment(nil) } }.font(.caption)
+                }
+            }
             if let reply = model.reply {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -418,7 +538,7 @@ struct TradeRoomView: View {
                         Text(reply.content ?? "#\(reply.id)").lineLimit(2)
                     }
                     Spacer()
-                    Button { model.reply = nil } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 20)) }
+                    Button { model.reply = nil; model.quoteText = nil } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 20)) }
                         .frame(minWidth: 44, minHeight: 44).accessibilityLabel(TradeText.text("取消回复"))
                 }
             }
@@ -440,7 +560,7 @@ struct TradeRoomView: View {
                     else { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)) }
                 }
                 .accessibilityLabel(TradeText.text("发送"))
-                .disabled(model.isSending || model.sendNeedsReview || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(model.isSending || model.sendNeedsReview || (model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.attachment == nil))
                 .frame(minWidth: 44, minHeight: 44)
                 Button { composerFocused = false } label: { Image(systemName: "keyboard.chevron.compact.down").font(.system(size: 22)) }
                     .frame(minWidth: 44, minHeight: 44).accessibilityLabel(TradeText.text("收起键盘"))
@@ -449,7 +569,8 @@ struct TradeRoomView: View {
     }
 
     private func messageText(_ message: TradeMessage) -> String {
-        if message.type == "deleted" { return TradeText.text("消息已删除") }
+        if message.hidden == true || message.type == "private_hidden" { return TradeText.text("此消息的内容仅对指定参与者可见。") }
+        if message.type == "deleted" || message.deleted == true { return TradeText.text("消息已删除") }
         if let content = message.content, !content.isEmpty { return content }
         return TradeText.text("此消息不是文字，暂无法在 App 内查看。")
     }
