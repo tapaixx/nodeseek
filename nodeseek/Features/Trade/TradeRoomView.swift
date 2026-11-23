@@ -12,10 +12,16 @@ final class TradeRoomModel: ObservableObject {
     @Published private(set) var invitePending = false
     @Published private(set) var notice: String?
     @Published var draft = ""
+    @Published var reply: TradeMessage?
+    @Published var isVisible = false
+    @Published private(set) var isMutating = false
+    @Published private(set) var actionNeedsReview = false
+    @Published private(set) var isLoading = false
 
+    private var lastReadID: Int64 = 0
+    private var isMarkingRead = false
     private let id: Int64
     private let api: TradeServing
-    private var isLoading = false
 
     init(id: Int64, api: TradeServing) {
         self.id = id
@@ -33,7 +39,7 @@ final class TradeRoomModel: ObservableObject {
             room = details
             if messages.isEmpty { hasMore = page.hasMore }
             merge(page.messages)
-            if !quiet, !sendNeedsReview { notice = nil }
+            if !quiet, !sendNeedsReview, !actionNeedsReview { notice = nil }
         } catch is CancellationError {
         } catch TradeAPIClient.Failure.signInRequired {
             room = nil
@@ -71,8 +77,11 @@ final class TradeRoomModel: ObservableObject {
         isSending = true
         defer { isSending = false }
         do {
-            let sent = try await api.send(text, to: id)
+            let sent: TradeMessage
+            if let reply { sent = try await api.send(text, to: id, replyingTo: reply.id) }
+            else { sent = try await api.send(text, to: id) }
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+            reply = nil
             merge([sent])
             notice = nil
         } catch TradeAPIClient.Failure.signInRequired {
@@ -85,9 +94,85 @@ final class TradeRoomModel: ObservableObject {
         }
     }
 
+    func markRead(through messageID: Int64) async {
+        guard isVisible, !isMarkingRead, room?.access.role != nil, messageID > lastReadID,
+              messages.contains(where: { $0.id == messageID }) else { return }
+        isMarkingRead = true
+        defer { isMarkingRead = false }
+        do {
+            try await api.markRead(conversationID: id, messageID: messageID)
+            lastReadID = messageID
+        } catch {
+            // 已读同步失败不阻塞聊天发送，下一次滚动或刷新后重试。
+        }
+    }
+
     func acknowledgeSend() {
         sendNeedsReview = false
         notice = nil
+    }
+
+    func acknowledgeAction() {
+        actionNeedsReview = false
+        notice = nil
+    }
+
+    func perform(_ action: TradeAction, confirmedRoom: TradeRoom) async {
+        guard !isMutating, !actionNeedsReview, confirmedRoom.availableActions.contains(action),
+              let confirmedTrade = confirmedRoom.trade else { return }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let fresh = try await api.room(id: id)
+            room = fresh
+            // 条款、进度、参与者或权限变化后，必须让用户看到新状态再确认。
+            guard fresh.trade == confirmedTrade, fresh.access == confirmedRoom.access,
+                  fresh.members == confirmedRoom.members, fresh.availableActions.contains(action) else {
+                notice = TradeText.text("交易状态已变化，请核对最新信息后重新操作。")
+                return
+            }
+        } catch {
+            notice = TradeText.text("无法读取交易数据，请稍后重试。")
+            return
+        }
+        do {
+            try await api.perform(action, tradeID: confirmedTrade.id)
+            notice = TradeText.text("操作已提交")
+            await reload(quiet: true)
+        } catch {
+            actionNeedsReview = true
+            notice = TradeText.text("未能确认操作结果，请刷新核对交易进度后再操作。")
+            await reload(quiet: true)
+        }
+    }
+
+    func saveTerms(_ terms: TradeTerms, confirmedRoom: TradeRoom) async -> Bool {
+        guard !isMutating, !actionNeedsReview, confirmedRoom.canEditTerms, let trade = confirmedRoom.trade,
+              terms.version == trade.version else { return false }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let fresh = try await api.room(id: id)
+            room = fresh
+            guard fresh.canEditTerms, fresh.trade == trade, fresh.members == confirmedRoom.members else {
+                notice = TradeText.text("交易状态已变化，请核对最新信息后重新操作。")
+                return false
+            }
+        } catch {
+            notice = TradeText.text("无法读取交易数据，请稍后重试。")
+            return false
+        }
+        do {
+            try await api.updateTerms(terms, tradeID: trade.id)
+            notice = TradeText.text("交易信息已保存")
+            await reload(quiet: true)
+            return true
+        } catch {
+            actionNeedsReview = true
+            notice = TradeText.text("未能确认操作结果，请刷新核对交易进度后再操作。")
+            await reload(quiet: true)
+            return false
+        }
     }
 
     func copyInvitation() async {
@@ -104,93 +189,263 @@ final class TradeRoomModel: ObservableObject {
     }
 }
 
+final class TradeRoomViewController: UIHostingController<TradeRoomView> {
+    private let model: TradeRoomModel
+    init(id: Int64, api: TradeServing) {
+        let model = TradeRoomModel(id: id, api: api)
+        self.model = model
+        super.init(rootView: TradeRoomView(model: model))
+        title = TradeText.text("交易群聊")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        model.isVisible = false
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        model.isVisible = true
+    }
+}
+
 struct TradeRoomView: View {
     @StateObject var model: TradeRoomModel
     @Environment(\.scenePhase) private var scenePhase
+    @FocusState private var composerFocused: Bool
+    @ScaledMetric(relativeTo: .body) private var editorHeight: CGFloat = 64
+    @State private var search = ""
+    @State private var detailsExpanded = false
+    @State private var proposedAction: TradeAction?
+    @State private var confirmedRoom: TradeRoom?
+    @State private var editingTerms = false
+    @State private var lastVisibleMessage: Int64?
+    @State private var viewport = CGRect.zero
+    @State private var scrolledInitially = false
+
+    private var shownMessages: [TradeMessage] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.messages.filter { query.isEmpty || ($0.content?.localizedStandardContains(query) == true)
+            || ($0.sender?.username.localizedStandardContains(query) == true) }
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             List {
                 if let room = model.room {
-                    Section(TradeText.text("交易进度")) {
-                        Text(room.conversation.displayTitle)
-                            .font(.headline)
-                        if let trade = room.trade {
-                            Text(stageTitle(trade.stage)).foregroundStyle(.secondary)
-                            if let steps = trade.steps, let index = trade.progressStep,
-                               steps.indices.contains(index), trade.stage == "in_progress",
-                               let label = steps[index].label ?? steps[index].title {
-                                Text(label).foregroundStyle(.secondary)
+                    Section {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(room.conversation.displayTitle).fontWeight(.semibold)
+                            HStack {
+                                if let trade = room.trade { Text(TradePresentation.stage(trade.stage)) }
+                                Spacer()
+                                if let role = room.access.role { Text(TradePresentation.role(role)) }
+                            }.font(.caption).foregroundStyle(.secondary)
+                            if let trade = room.trade, let index = trade.progressStep, let steps = trade.steps,
+                               steps.indices.contains(index), trade.stage == "in_progress" {
+                                Label(steps[index].label ?? steps[index].title ?? steps[index].key, systemImage: "circle.dotted")
                             }
+                        }.padding(.vertical, 4)
+                        DisclosureGroup(TradeText.text("交易信息与进度"), isExpanded: $detailsExpanded) {
+                            TradeDetailsView(room: room)
+                        }
+                        if room.canEditTerms {
+                            Button(TradeText.text("编辑交易信息")) { editingTerms = true }
+                                .disabled(model.isMutating || model.actionNeedsReview)
                         }
                         if room.canInvite {
-                            Button(TradeText.text("复制参与链接")) { Task { await model.copyInvitation() } }
-                                .disabled(model.invitePending)
+                            Button {
+                                Task { await model.copyInvitation() }
+                            } label: { Label(TradeText.text("复制参与链接"), systemImage: "link") }
+                            .disabled(model.invitePending)
+                        }
+                        ForEach(room.availableActions) { action in
+                            Button(action.title) { confirmedRoom = room; proposedAction = action }
+                                .disabled(model.isMutating || model.actionNeedsReview)
+                        }
+                        if model.isMutating { ProgressView() }
+                    }
+                }
+                if let notice = model.notice {
+                    Section {
+                        Text(notice).foregroundStyle(.secondary)
+                        if model.actionNeedsReview {
+                            Button(TradeText.text("刷新交易状态")) { Task { await model.reload(quiet: true) } }
+                            Button(TradeText.text("已核对操作结果")) { model.acknowledgeAction() }
+                        }
+                        if model.sendNeedsReview {
+                            Button(TradeText.text("已核对，可再次发送")) { model.acknowledgeSend() }
                         }
                     }
                 }
-                if let notice = model.notice { Text(notice).foregroundStyle(.secondary) }
-                if model.sendNeedsReview {
-                    Button(TradeText.text("已核对，可再次发送")) { model.acknowledgeSend() }
-                }
                 if model.room == nil {
-                    if model.notice == nil { ProgressView() }
+                    if model.isLoading { ProgressView() }
                     else { Button(TradeText.text("重试")) { Task { await model.reload() } } }
                 } else {
                     Section(TradeText.text("交易群聊")) {
-                        if model.hasMore { Button(TradeText.text("加载更早的消息")) { Task { await model.loadOlder() } } }
-                        if model.messages.isEmpty { Text(TradeText.text("暂无消息")).foregroundStyle(.secondary) }
-                        ForEach(model.messages) { message in
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(message.sender?.username ?? TradeText.text("系统消息"))
-                                    .font(.caption).foregroundStyle(.secondary)
-                                Text(messageText(message)).textSelection(.enabled)
-                                if let stamp = message.createdAt, let date = ISO8601DateFormatter().date(from: stamp)
-                                    ?? fractionalDate(stamp) {
-                                    Text(date.formatted(.dateTime.year().month().day().hour().minute().second()))
-                                        .font(.caption2).foregroundStyle(.secondary)
+                        if model.hasMore {
+                            Button(TradeText.text("加载更早的消息")) {
+                                let anchor = shownMessages.first?.id
+                                Task {
+                                    await model.loadOlder()
+                                    if let anchor { proxy.scrollTo(anchor, anchor: .top) }
                                 }
-                            }
-                            .id(message.id)
+                            }.disabled(model.isLoading)
+                        }
+                        if shownMessages.isEmpty {
+                            Text(TradeText.text(search.isEmpty ? "暂无消息" : "没有匹配的消息"))
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(shownMessages) { message in
+                            messageRow(message)
+                                .id(message.id)
+                                .background(GeometryReader { geometry in
+                                    Color.clear.preference(key: TradeMessageFrames.self, value: [message.id: geometry.frame(in: .global)])
+                                })
                         }
                     }
                 }
             }
+            .background(GeometryReader { geometry in
+                Color.clear.onAppear { viewport = geometry.frame(in: .global) }
+                    .onChange(of: geometry.frame(in: .global)) { viewport = $0 }
+            })
+            .onPreferenceChange(TradeMessageFrames.self) { frames in
+                let visible = frames.filter { $0.value.intersects(viewport) && $0.value.height > 0 }.keys.max()
+                lastVisibleMessage = visible
+                if let visible, scenePhase == .active { Task { await model.markRead(through: visible) } }
+            }
+            .searchable(text: $search, prompt: TradeText.text("搜索已加载的消息"))
             .refreshable { await model.reload() }
-            .safeAreaInset(edge: .bottom) {
-                if model.room?.access.canWrite == true {
-                    HStack(spacing: 12) {
-                        TextField(TradeText.text("输入消息"), text: $model.draft)
-                            .textFieldStyle(.roundedBorder)
-                            .accessibilityIdentifier("trade-message-field")
-                        Button(TradeText.text("发送")) {
-                            Task {
-                                await model.send()
-                                if let last = model.messages.last?.id { proxy.scrollTo(last, anchor: .bottom) }
-                            }
-                        }
-                        .disabled(model.isSending || model.sendNeedsReview || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .frame(minHeight: 44)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    if search.isEmpty, let last = model.messages.last?.id, lastVisibleMessage != last {
+                        Button {
+                            withAnimation { proxy.scrollTo(last, anchor: .bottom) }
+                        } label: { Label(TradeText.text("回到最新消息"), systemImage: "arrow.down.circle") }.font(.callout)
+                        .padding(8)
                     }
-                    .padding(.horizontal)
-                    .background(.regularMaterial)
-                }
+                    if model.room?.access.canWrite == true { composer(proxy: proxy) }
+                    else if model.room != nil {
+                        Text(TradeText.text("当前交易为只读，无法发送消息。"))
+                            .font(.footnote).foregroundStyle(.secondary).padding()
+                    }
+                }.background(Color(uiColor: .systemBackground))
+            }
+            .onChange(of: model.messages.last?.id) { _ in
+                guard !scrolledInitially, search.isEmpty, let id = model.messages.last?.id else { return }
+                scrolledInitially = true
+                proxy.scrollTo(id, anchor: .bottom)
             }
         }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
+        .tradeTypography()
+        .task(id: model.isVisible && scenePhase == .active) {
+            guard model.isVisible, scenePhase == .active else { return }
             await model.reload()
+            if let id = lastVisibleMessage { await model.markRead(through: id) }
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
                 await model.reload(quiet: true)
+                if let id = lastVisibleMessage { await model.markRead(through: id) }
+            }
+        }
+        .alert(proposedAction?.title ?? "", isPresented: Binding(get: { proposedAction != nil }, set: { if !$0 { proposedAction = nil } })) {
+            Button(TradeText.text("取消"), role: .cancel) { proposedAction = nil }
+            Button(TradeText.text("确认")) {
+                if let action = proposedAction, let room = confirmedRoom {
+                    Task { await model.perform(action, confirmedRoom: room) }
+                }
+                proposedAction = nil
+            }
+        } message: {
+            if let action = proposedAction, let room = confirmedRoom {
+                Text(action.explanation(in: room) + "\n\n" + actionSummary(room))
+            }
+        }
+        .sheet(isPresented: $editingTerms) {
+            if let room = model.room { TradeTermsView(model: model, room: room).tradeTypography() }
+        }
+    }
+
+    private func actionSummary(_ room: TradeRoom) -> String {
+        let roles = ["buyer", "seller", "agent"].map { role in
+            let name = room.members?.first(where: { $0.role == role })?.username ?? TradeText.text("等待加入")
+            return TradePresentation.role(role) + ": " + name
+        }
+        return ([room.conversation.displayTitle,
+                 TradeText.text("物品价格") + ": " + TradePresentation.money(room.trade?.price),
+                 TradeText.text("中介费") + ": " + TradePresentation.money(room.trade?.agentFee)] + roles).joined(separator: "\n")
+    }
+
+    private func messageRow(_ message: TradeMessage) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                Text(message.sender?.username ?? TradeText.text("系统消息")).fontWeight(.medium)
+                if let sender = message.sender,
+                   let role = model.room?.members?.first(where: { $0.id == sender.id })?.role {
+                    Text(TradePresentation.role(role)).foregroundStyle(.secondary)
+                }
+            }.font(.caption)
+            if let reply = message.replyTo {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(reply.sender?.username ?? TradeText.text("回复消息")).font(.caption)
+                    Text(reply.content ?? "#\(reply.id)").lineLimit(2)
+                }.foregroundStyle(.secondary).padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+            }
+            Text(messageText(message)).textSelection(.enabled)
+            if let stamp = TradePresentation.timestamp(message.createdAt) {
+                Text(stamp).font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+        .contextMenu {
+            if let text = message.content, message.type != "deleted" {
+                Button { UIPasteboard.general.string = text } label: { Label(TradeText.text("复制消息"), systemImage: "doc.on.doc") }
+                if model.room?.access.canWrite == true {
+                    Button { model.reply = message; composerFocused = true } label: { Label(TradeText.text("回复消息"), systemImage: "arrowshape.turn.up.left") }
+                }
             }
         }
     }
 
-    private func fractionalDate(_ stamp: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: stamp)
+    private func composer(proxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let reply = model.reply {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(reply.sender?.username ?? TradeText.text("回复消息")).font(.caption).foregroundStyle(.secondary)
+                        Text(reply.content ?? "#\(reply.id)").lineLimit(2)
+                    }
+                    Spacer()
+                    Button { model.reply = nil } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 20)) }
+                        .frame(minWidth: 44, minHeight: 44).accessibilityLabel(TradeText.text("取消回复"))
+                }
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                TextEditor(text: $model.draft)
+                    .focused($composerFocused)
+                    .frame(height: min(editorHeight, 160))
+                    .background(Color(uiColor: .secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel(TradeText.text("输入消息"))
+                    .accessibilityIdentifier("trade-message-field")
+                Button {
+                    Task {
+                        await model.send()
+                        if !model.sendNeedsReview, let last = model.messages.last?.id { proxy.scrollTo(last, anchor: .bottom) }
+                    }
+                } label: {
+                    if model.isSending { ProgressView() }
+                    else { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)) }
+                }
+                .accessibilityLabel(TradeText.text("发送"))
+                .disabled(model.isSending || model.sendNeedsReview || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .frame(minWidth: 44, minHeight: 44)
+                Button { composerFocused = false } label: { Image(systemName: "keyboard.chevron.compact.down").font(.system(size: 22)) }
+                    .frame(minWidth: 44, minHeight: 44).accessibilityLabel(TradeText.text("收起键盘"))
+            }
+        }.padding(.horizontal).padding(.vertical, 8)
     }
 
     private func messageText(_ message: TradeMessage) -> String {
@@ -198,16 +453,12 @@ struct TradeRoomView: View {
         if let content = message.content, !content.isEmpty { return content }
         return TradeText.text("此消息不是文字，暂无法在 App 内查看。")
     }
+}
 
-    private func stageTitle(_ stage: String) -> String {
-        switch stage {
-        case "draft": TradeText.text("待敲定")
-        case "finalized": TradeText.text("待确认")
-        case "in_progress": TradeText.text("交易进行中")
-        case "unlock_pending": TradeText.text("等待解锁确认")
-        case "completed": TradeText.text("已完成")
-        case "cancelled": TradeText.text("已取消")
-        default: TradeText.text("未知进度")
-        }
+
+private struct TradeMessageFrames: PreferenceKey {
+    static var defaultValue: [Int64: CGRect] { [:] }
+    static func reduce(value: inout [Int64: CGRect], nextValue: () -> [Int64: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }

@@ -234,3 +234,12 @@ private final class TradeStub: TradeServing {
 
     func invitation(for tradeID: Int64) async throws -> URL { TradeAPIClient.webURL }
 }
+
+extension TradeStub {
+    func markRead(conversationID: Int64, messageID: Int64) async throws {}
+    func invitation(token: String) async throws -> TradeInvitation { throw URLError(.unsupportedURL) }
+    func join(token: String, role: String?) async throws -> Int64 { 42 }
+    func perform(_ action: TradeAction, tradeID: Int64) async throws {}
+    func updateTerms(_ terms: TradeTerms, tradeID: Int64) async throws {}
+    func send(_ text: String, to id: Int64, replyingTo: Int64) async throws -> TradeMessage { try await send(text, to: id) }
+}

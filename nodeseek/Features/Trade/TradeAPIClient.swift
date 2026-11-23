@@ -8,25 +8,73 @@ enum TradeText {
     }
 }
 
-struct TradeUser: Decodable, Identifiable {
+struct TradeUser: Decodable, Identifiable, Equatable {
     let id: Int64
     let username: String
 }
 
 struct TradeConversation: Decodable, Identifiable {
-    struct Preview: Decodable { let text: String? }
+    struct Preview: Decodable { let text: String?; var at: String? = nil; var sender: String? = nil }
+    struct Summary: Decodable { let stage: String? }
     let id: Int64
     let title: String?
     let status: String?
     let lastMessage: Preview?
+    var trade: Summary? = nil
+    var unread: Int? = nil
+    var myRole: String? = nil
+    var createdAt: String? = nil
     var displayTitle: String { title.flatMap { $0.isEmpty ? nil : $0 } ?? TradeText.text("未命名交易") }
 }
 
+struct TradeAmount: Decodable, Equatable {
+    let value: String
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) { value = string }
+        else { value = NSDecimalNumber(decimal: try container.decode(Decimal.self)).stringValue }
+    }
+}
+
 struct TradeRoom: Decodable {
-    struct Access: Decodable { let canWrite: Bool; let role: String? }
-    struct Progress: Decodable { let id: Int64; let stage: String; let progressStep: Int?; let steps: [Step]? }
-    struct Step: Decodable { let key: String; let label: String?; let title: String? }
-    struct Member: Decodable { let role: String }
+    struct Access: Decodable, Equatable { let canWrite: Bool; let role: String? }
+    struct Progress: Decodable, Equatable {
+        let id: Int64
+        let stage: String
+        let progressStep: Int?
+        let steps: [Step]?
+        var title: String? = nil
+        var version: Int? = nil
+        var price: TradeAmount? = nil
+        var agentFee: TradeAmount? = nil
+        var feePayer: String? = nil
+        var deliveryMethod: String? = nil
+        var postUrl: String? = nil
+        var brand: String? = nil
+        var priceNote: String? = nil
+        var agentFeeNote: String? = nil
+        var buyerConfirmedAt: String? = nil
+        var sellerConfirmedAt: String? = nil
+        var unlockBuyerAt: String? = nil
+        var unlockSellerAt: String? = nil
+        var freeChatAt: String? = nil
+        var proposal: Proposal? = nil
+        var escrowTaskId: Int64? = nil
+        var redPacket: RedPacket? = nil
+    }
+    struct Proposal: Decodable, Equatable { var kind: String? = nil }
+    struct RedPacket: Decodable, Equatable { var amount: TradeAmount? = nil }
+    struct Step: Decodable, Equatable {
+        let key: String
+        let label: String?
+        let title: String?
+        var roles: [String]? = nil
+    }
+    struct Member: Decodable, Equatable {
+        let role: String
+        var id: Int64? = nil
+        var username: String? = nil
+    }
     let conversation: TradeConversation
     let access: Access
     let trade: Progress?
@@ -40,11 +88,31 @@ struct TradeRoom: Decodable {
 }
 
 struct TradeMessage: Decodable, Identifiable {
+    struct Reply: Decodable { let id: Int64; var content: String? = nil; var sender: TradeUser? = nil }
     let id: Int64
     let sender: TradeUser?
     let content: String?
     let createdAt: String?
     let type: String?
+    var replyTo: Reply? = nil
+    var replyToId: Int64? = nil
+}
+
+struct TradeInvitation: Decodable {
+    struct Role: Decodable, Identifiable {
+        let role: String
+        let allowed: Bool
+        let takenBy: String?
+        var id: String { role }
+    }
+    let conversationId: Int64
+    let kind: String
+    let trade: TradeRoom.Progress
+    let roles: [Role]?
+    let myRole: String?
+
+    var isMember: Bool { myRole != nil && myRole != "observer" }
+    var availableRoles: [Role] { (roles ?? []).filter { $0.allowed && $0.takenBy == nil } }
 }
 
 struct TradeMessagePage: Decodable {
@@ -68,6 +136,12 @@ protocol TradeServing: AnyObject {
     func messages(id: Int64, before: Int64?) async throws -> TradeMessagePage
     func send(_ text: String, to id: Int64) async throws -> TradeMessage
     func invitation(for tradeID: Int64) async throws -> URL
+    func invitation(token: String) async throws -> TradeInvitation
+    func join(token: String, role: String?) async throws -> Int64
+    func perform(_ action: TradeAction, tradeID: Int64) async throws
+    func updateTerms(_ terms: TradeTerms, tradeID: Int64) async throws
+    func markRead(conversationID: Int64, messageID: Int64) async throws
+    func send(_ text: String, to id: Int64, replyingTo: Int64) async throws -> TradeMessage
 }
 
 @MainActor
@@ -101,7 +175,7 @@ final class TradeAPIClient: TradeServing {
     private struct CreatedResponse: Decodable { let conversationId: Int64 }
     private struct MessageResponse: Decodable { let message: TradeMessage }
     private struct CreateBody: Encodable { let role: String; let title: String; let agentUserId: Int64 }
-    private struct MessageBody: Encodable { let content: String }
+    private struct MessageBody: Encodable { let content: String; var replyToId: Int64? = nil }
     private struct InviteResponse: Decodable { let token: String }
     private struct ErrorResponse: Decodable { let code: String? }
 
@@ -166,6 +240,39 @@ final class TradeAPIClient: TradeServing {
         }) else { throw Failure.invalidResponse }
         return Self.webURL.appendingPathComponent("chat/invite").appendingPathComponent(result.token)
     }
+
+    func invitation(token: String) async throws -> TradeInvitation {
+        guard TradeInvitationLink.isValidToken(token) else { throw Failure.invalidResponse }
+        return try await request(TradeInvitation.self, path: "/api/common/invites/\(token)")
+    }
+
+    func join(token: String, role: String?) async throws -> Int64 {
+        guard TradeInvitationLink.isValidToken(token) else { throw Failure.invalidResponse }
+        return try await request(CreatedResponse.self, path: "/api/common/invites/\(token)/join", method: "POST",
+                                 body: encode(role.map { ["role": $0] } ?? [:])).conversationId
+    }
+
+    func perform(_ action: TradeAction, tradeID: Int64) async throws {
+        let body = action.step.map { ["step": $0] } ?? [:]
+        _ = try await request(TradeMutationResponse.self, path: "/api/common/trades/\(tradeID)/\(action.endpoint)",
+                              method: "POST", body: encode(body))
+    }
+
+    func markRead(conversationID: Int64, messageID: Int64) async throws {
+        _ = try await request(TradeMutationResponse.self, path: "/api/common/conversations/\(conversationID)/read", method: "POST",
+                              body: encode(["message_id": messageID]))
+    }
+
+    func updateTerms(_ terms: TradeTerms, tradeID: Int64) async throws {
+        _ = try await request(TradeMutationResponse.self, path: "/api/common/trades/\(tradeID)", method: "PATCH", body: encode(terms))
+    }
+
+    func send(_ text: String, to id: Int64, replyingTo: Int64) async throws -> TradeMessage {
+        try await request(MessageResponse.self, path: "/api/common/conversations/\(id)/messages", method: "POST",
+                          body: encode(MessageBody(content: text, replyToId: replyingTo))).message
+    }
+
+    private struct TradeMutationResponse: Decodable {}
 
     private func encode<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
