@@ -10,17 +10,45 @@ import UIKit
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     var window: UIWindow?
+    private var launchTask: Task<Void, Never>?
     private let appRouter = AppRouter()
+    private let deepLinkRouter = AppDeepLinkRouter()
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         let window = UIWindow(windowScene: windowScene)
+        self.window = window
+        let appDelegate = UIApplication.shared.delegate as? AppDelegate
+        if let preparation = appDelegate?.accountLaunchPreparation ?? appDelegate?.logoutCleanup {
+            // 系统启动屏退场前先显示同款底色和标志。账号恢复完成后再创建业务页面。
+            let logo = UIImageView(image: UIImage(named: "SplashLogo"))
+            logo.backgroundColor = UIColor(named: "SplashBackground")
+            logo.contentMode = .center
+            let placeholder = UIViewController()
+            placeholder.view = logo
+            window.rootViewController = placeholder
+            launchTask = Task { @MainActor [weak self] in
+                await preparation.value
+                guard !Task.isCancelled else { return }
+                self?.showRoot(in: window, options: connectionOptions)
+            }
+        } else {
+            showRoot(in: window, options: connectionOptions)
+        }
+        window.makeKeyAndVisible()
+    }
+
+    private func showRoot(in window: UIWindow, options connectionOptions: UIScene.ConnectionOptions) {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-DetailTextKitPrototype") {
+            window.rootViewController = UINavigationController(rootViewController: DetailMarkdownPrototypeController.demo())
+            return
+        }
+        #endif
         appRouter.window = window
         let launchedFromPush = connectionOptions.notificationResponse != nil || !connectionOptions.urlContexts.isEmpty
         window.rootViewController = appRouter.makeRootViewController()
-        window.makeKeyAndVisible()
-        self.window = window
         AppMessageCenter.shared.attach(window: window)
 
         // 窗口显示后异步预热 WebView，供验证页回退使用；推送冷启动不弹引导，避免挡住跳转。
@@ -31,26 +59,26 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
 
         if let response = connectionOptions.notificationResponse {
-            PushNotificationDeepLink.handle(userInfo: response.notification.request.content.userInfo)
+            PushNotificationDeepLink.handle(response)
         }
-        handle(urlContexts: connectionOptions.urlContexts)
+        if !deepLinkRouter.openPending(in: appRouter) {
+            handle(urlContexts: connectionOptions.urlContexts)
+        }
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         handle(urlContexts: URLContexts)
     }
 
-    /// 小工具與 Bark 共用外部連結入口，路由分別驗證。
     private func handle(urlContexts: Set<UIOpenURLContext>) {
         for context in urlContexts {
-            if let link = ProbeWidgetLink(url: context.url) {
-                PushNotificationDeepLink.handle(.probe(link))
-                return
-            }
             if let route = ExternalPushLink.route(from: context.url) {
                 PushNotificationDeepLink.handle(route)
                 return
             }
+            guard let route = AppDeepLink.route(for: context.url) else { continue }
+            deepLinkRouter.open(route, url: context.url, in: appRouter)
+            return
         }
     }
 
@@ -63,10 +91,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
-        // Called as the scene is being released by the system.
-        // This occurs shortly after the scene enters the background, or when its session is discarded.
-        // Release any resources associated with this scene that can be re-created the next time the scene connects.
-        // The scene may re-connect later, as its session was not necessarily discarded (see `application:didDiscardSceneSessions` instead).
+        launchTask?.cancel()
+        launchTask = nil
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
@@ -74,17 +100,14 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         DirectPushMonitor.shared.start()
         Task { @MainActor [weak self] in
             guard let self else { return }
+            await launchTask?.value
+            guard scene.activationState == .foregroundActive else { return }
             guard let presentationContext = self.autoCheckInPresentationContext() else { return }
             await AutoCheckInModule.runIfNeeded(
                 presentationContext: presentationContext,
                 trigger: .sceneBecomeActive
             )
         }
-    }
-
-    func sceneWillResignActive(_ scene: UIScene) {
-        // Called when the scene will move from an active state to an inactive state.
-        // This may occur due to temporary interruptions (ex. an incoming phone call).
     }
 
     func sceneWillEnterForeground(_ scene: UIScene) {

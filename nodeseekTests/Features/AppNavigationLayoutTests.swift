@@ -130,9 +130,15 @@ struct AppNavigationLayoutTests {
         #expect(refreshControl.isRefreshing == false)
     }
 
-    @Test func mePageShowsGuestStateWithLoginButtonAndEntries() throws {
-        let viewController = MeViewController()
+    @Test func mePageShowsGuestStateWithLoginButtonAndEntries() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "me-guest-layout-\(UUID().uuidString)"))
+        let controller = PostListSideMenuAccountController(
+            currentAccountStore: CurrentAccountStore(userDefaults: defaults, storageKey: "account"),
+            accountRefresher: GuestAccountRefresher()
+        )
+        let viewController = MeViewController(accountController: controller)
         viewController.loadViewIfNeeded()
+        await controller.refreshNow()
         let view = try #require(viewController.view)
 
         let loginButton = try #require(view.layoutTestButton(identifier: "me-login-button"))
@@ -286,6 +292,25 @@ struct AppNavigationLayoutTests {
 
         settings.setTabItems([.home, .me])
         #expect(tabBarController.viewControllers?.count == 2)
+    }
+
+    @Test func sessionChangeReplacesPrivateTabRootsAndKeepsSelection() throws {
+        let settings = makeSettings()
+        settings.setTabItems([.home, .collections, .comments, .notification, .me])
+        let tabs = MainTabBarController(layoutSettings: settings)
+        let before = try #require(tabs.viewControllers)
+        tabs.selectedIndex = 1
+
+        NotificationCenter.default.post(name: .nodeSeekLoginSessionDidClose, object: nil)
+        #expect(tabs.selectedViewController === before[1])
+        NotificationCenter.default.post(name: .nodeSeekAccountSessionDidChange, object: nil)
+
+        let after = try #require(tabs.viewControllers)
+        #expect(after.count == before.count)
+        #expect(after[0] === before[0])
+        #expect(after[4] === before[4])
+        for index in 1...3 { #expect(after[index] !== before[index]) }
+        #expect(tabs.selectedViewController === after[1])
     }
 
     @Test func customizePageInSettingsAppliesChangesImmediately() throws {

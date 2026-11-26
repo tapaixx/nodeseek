@@ -9,7 +9,6 @@
 import XCTest
 import UIKit
 import WebKit
-import AsyncDisplayKit
 @testable import nodeseek
 
 @MainActor
@@ -167,18 +166,21 @@ final class AppUXAuditTests: XCTestCase {
         controller.onSelectPost = { _, page, anchor in opened.append((page, anchor)) }
         controller.loadViewIfNeeded()
 
-        let probeTable = ASTableNode()
+        let probeTable = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UITableView }.first)
         let loaded = await uxWaitUntil(timeout: 3) {
-            controller.tableNode(probeTable, numberOfRowsInSection: 0) == 1
+            controller.tableView(probeTable, numberOfRowsInSection: 0) == 1
                 && (uxChild(of: controller, named: "groups") as [UserCommentGroup]?)?.count == 1
         }
         XCTAssertTrue(loaded, "前置条件：评论列表应加载出 1 组")
 
         // 点回复文字所在的整行（不是右侧气泡）
-        let cell = controller.tableNode(probeTable, nodeBlockForRowAt: IndexPath(row: 0, section: 0))()
-        let replies = try XCTUnwrap(uxChild(of: cell, named: "replies") as [ASControlNode]?)
-        XCTAssertEqual(replies.count, 1)
-        replies[0].sendActions(forControlEvents: .touchUpInside, with: nil)
+        let cell = controller.tableView(probeTable, cellForRowAt: IndexPath(row: 0, section: 0))
+        func buttons(in view: UIView) -> [UIButton] {
+            view.subviews.compactMap { $0 as? UIButton } + view.subviews.flatMap { buttons(in: $0) }
+        }
+        let replyLabel = String(format: UserContentL10n.text("打开评论 #%ld"), 15)
+        let reply = try XCTUnwrap(buttons(in: cell).first { $0.accessibilityLabel == replyLabel })
+        reply.sendActions(for: .touchUpInside)
 
         XCTAssertEqual(opened.count, 1)
         XCTAssertEqual(opened.first?.page, 2, "U23: 点评论行打开的是第 \(opened.first?.page ?? 0) 页，不是 #15 所在的第 2 页")
@@ -222,6 +224,50 @@ final class AppUXAuditTests: XCTestCase {
         header.sendActions(for: .touchUpInside)
 
         XCTAssertTrue(context.navigationController.topViewController is ProfileEditViewController)
+    }
+
+    /// 期望：切换账号入口在资料卡右侧，点它弹出切换面板，不进资料页；导航栏只剩设置。
+    func testMeProfileCardSwitchButtonPresentsAccountSwitcher() async throws {
+        let context = try await makeLoggedInMePage()
+        defer { context.window.isHidden = true }
+        let me = context.viewController
+        XCTAssertEqual(me.navigationItem.rightBarButtonItems?.count ?? 0, 1)
+        let views = uxDescendants(of: me.view)
+        let card = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "me-profile-card" })
+        let button = try XCTUnwrap(
+            views.first { $0.accessibilityIdentifier == "me-profile-switch-account-button" } as? UIButton
+        )
+        XCTAssertFalse(button.isHidden)
+        // 视觉 32pt 之外的边缘也应命中按钮（44pt 热区）
+        let edgePoint = button.convert(CGPoint(x: button.bounds.maxX + 5, y: button.bounds.midY), to: card)
+        XCTAssertTrue(card.hitTest(edgePoint, with: nil) === button)
+
+        button.sendActions(for: .touchUpInside)
+        _ = await uxWaitUntil(timeout: 1) { me.presentedViewController != nil }
+
+        let presented = try XCTUnwrap(me.presentedViewController as? UINavigationController)
+        XCTAssertTrue(presented.viewControllers.first is AccountSwitcherViewController)
+        XCTAssertTrue(context.navigationController.topViewController === me)
+        presented.dismiss(animated: false)
+    }
+
+    func testMeContentRowsKeepTheirFramesWhenProfileLoads() async throws {
+        func rowFrames(in page: MeViewController) -> [CGRect] {
+            page.view.layoutIfNeeded()
+            return uxDescendants(of: page.view)
+                .filter { $0.accessibilityIdentifier?.hasSuffix("-row") == true }
+                .map { $0.convert($0.bounds, to: page.view) }
+        }
+
+        var initialFrames: [CGRect]?
+        let context = try await makeLoggedInMePage { page in
+            if initialFrames == nil { initialFrames = rowFrames(in: page) }
+        }
+        defer { context.window.isHidden = true }
+        XCTAssertNotNil(context.todayLabelText)
+        let initial = try XCTUnwrap(initialFrames)
+        XCTAssertEqual(initial.count, 8)
+        XCTAssertEqual(rowFrames(in: context.viewController), initial)
     }
 
     func testMeLevelProgressRowExpandsAndCollapsesInPlace() async throws {
@@ -407,7 +453,9 @@ final class AppUXAuditTests: XCTestCase {
     }
 
     /// 用独立账号存储和模拟接口搭一个已登录、资料与今日进度都已加载的「我的」页。
-    private func makeLoggedInMePage() async throws -> MePageContext {
+    private func makeLoggedInMePage(
+        onAccountRendered: ((MeViewController) -> Void)? = nil
+    ) async throws -> MePageContext {
         UXAuditMockURLProtocol.responsesByPath = [
             "/api/account/getInfo/31037": #"{"success":true,"detail":{"member_id":31037,"member_name":"缭雾","rank":4,"coin":2000,"stardust":21,"bio":"","created_at":"2024-11-23T17:11:12.000Z","nPost":26,"nComment":607,"follows":3,"fans":5,"readme":"","followed":false}}"#,
             "/api/progress/today": #"{"success":true,"postBonusCount":0,"maxPostBonusCount":4,"commentBonusCount":7,"maxCommentBonusCount":20,"maxFreeLike":3,"freeLikeUsed":0}"#,
@@ -421,17 +469,25 @@ final class AppUXAuditTests: XCTestCase {
             profileURL: URL(string: "https://www.nodeseek.com/space/31037")
         ))
         let client = NodeSeekUserContentClient(session: uxMockSession())
+        let accountController = PostListSideMenuAccountController(
+            currentAccountStore: store, accountRefresher: UXAuditAccountRefresher()
+        )
         let me = MeViewController(
-            accountController: PostListSideMenuAccountController(
-                currentAccountStore: store,
-                accountRefresher: UXAuditAccountRefresher()
-            ),
+            accountController: accountController,
             client: client,
             notificationClient: UXAuditNotificationClient(),
             visitedStore: EmptyVisitedPostStore()
         )
         let navigation = UINavigationController(rootViewController: me)
         let window = uxMakeWindow(root: navigation)
+
+        if let onAccountRendered {
+            let render = accountController.onAccountChanged
+            accountController.onAccountChanged = { [weak me] account in
+                render?(account)
+                if account.isLoggedIn, let me { onAccountRendered(me) }
+            }
+        }
 
         var todayText: String?
         _ = await uxWaitUntil(timeout: 3) {
@@ -567,6 +623,7 @@ private final class UXAuditPostListPresenter: PostListPresenterProtocol {
     func didTapCheckIn() {}
     func didTapNotification(url: URL) {}
     func didTapRecentVisited() {}
+    func didTapHotList() {}
     func didTapUserDiscussions() {}
     func didTapUserComments() {}
     func didTapUserCollections() {}

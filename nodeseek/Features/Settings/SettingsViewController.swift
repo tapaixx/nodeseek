@@ -119,6 +119,7 @@ class SettingsViewController: UITableViewController {
         case navigationLayout
         case categoryPreferences
         case homeSearchEntry
+        case sortPreferences
         case textSize
         case signatureDisplay
         case imageDimming
@@ -137,9 +138,15 @@ class SettingsViewController: UITableViewController {
         case pushNotification
     }
 
+    private enum AccountRow: Int, CaseIterable {
+        case management
+        case logout
+    }
+
     private let cacheManager: SettingsCacheManaging
     private let sessionManager: SettingsSessionManaging
     private let currentAccountStore: CurrentAccountStore
+    private let accountVaultStore: AccountVaultStore
     private let buildInfo: SettingsBuildInfo
     private let nodeImageAPIKeyStore: NodeImageAPIKeyStoring
     private let nodeImageAuthorizationPresenter: NodeImageAuthorizationPresenting
@@ -147,6 +154,7 @@ class SettingsViewController: UITableViewController {
     private let signatureDisplaySettings: PostSignatureDisplaySettings
     private let imageDimmingSettings: DetailImageDimmingSettings
     private let searchEntrySettings: PostListSearchEntrySettings
+    private let sortPreferenceStore: PostListSortPreferenceStoring
     private let categoryPreferenceStore: PostCategoryPreferenceStore
     private let specialFollowKeywordStore: SpecialFollowKeywordStore
     private let pushAuthorizationStatusProvider: @MainActor () async -> UNAuthorizationStatus
@@ -166,6 +174,7 @@ class SettingsViewController: UITableViewController {
         cacheManager: SettingsCacheManaging? = nil,
         sessionManager: SettingsSessionManaging? = nil,
         currentAccountStore: CurrentAccountStore = .shared,
+        accountVaultStore: AccountVaultStore = .shared,
         buildInfo: SettingsBuildInfo = SettingsBuildInfo(),
         nodeImageAPIKeyStore: NodeImageAPIKeyStoring = KeychainNodeImageAPIKeyStore(),
         nodeImageAuthorizationPresenter: NodeImageAuthorizationPresenting? = nil,
@@ -173,6 +182,7 @@ class SettingsViewController: UITableViewController {
         signatureDisplaySettings: PostSignatureDisplaySettings = .shared,
         imageDimmingSettings: DetailImageDimmingSettings = .shared,
         searchEntrySettings: PostListSearchEntrySettings = .shared,
+        sortPreferenceStore: PostListSortPreferenceStoring = PostListSortPreferenceStore.shared,
         categoryPreferenceStore: PostCategoryPreferenceStore = .shared,
         specialFollowKeywordStore: SpecialFollowKeywordStore = .shared,
         pushAuthorizationStatusProvider: @escaping @MainActor () async -> UNAuthorizationStatus = {
@@ -190,6 +200,7 @@ class SettingsViewController: UITableViewController {
         self.cacheManager = cacheManager ?? DefaultSettingsCacheManager()
         self.sessionManager = sessionManager ?? DefaultSettingsSessionManager()
         self.currentAccountStore = currentAccountStore
+        self.accountVaultStore = accountVaultStore
         self.buildInfo = buildInfo
         self.nodeImageAPIKeyStore = nodeImageAPIKeyStore
         self.nodeImageAuthorizationPresenter = nodeImageAuthorizationPresenter ?? DefaultNodeImageAuthorizationPresenter()
@@ -197,6 +208,7 @@ class SettingsViewController: UITableViewController {
         self.signatureDisplaySettings = signatureDisplaySettings
         self.imageDimmingSettings = imageDimmingSettings
         self.searchEntrySettings = searchEntrySettings
+        self.sortPreferenceStore = sortPreferenceStore
         self.categoryPreferenceStore = categoryPreferenceStore
         self.specialFollowKeywordStore = specialFollowKeywordStore
         self.pushAuthorizationStatusProvider = pushAuthorizationStatusProvider
@@ -276,7 +288,7 @@ class SettingsViewController: UITableViewController {
         case .about:
             return 1
         case .account:
-            return isLoggedIn ? 1 : 0
+            return visibleAccountRows.count
         case .none:
             return 0
         }
@@ -297,7 +309,7 @@ class SettingsViewController: UITableViewController {
         case .about:
             return nil
         case .account:
-            return isLoggedIn ? "账号" : nil
+            return visibleAccountRows.isEmpty ? nil : "账号"
         case .none:
             return nil
         }
@@ -318,7 +330,14 @@ class SettingsViewController: UITableViewController {
         case .about:
             return aboutCell(for: indexPath)
         case .account:
-            return logoutCell(for: indexPath)
+            let rows = visibleAccountRows
+            guard rows.indices.contains(indexPath.row) else { return UITableViewCell() }
+            switch rows[indexPath.row] {
+            case .management:
+                return accountManagementCell(for: indexPath)
+            case .logout:
+                return logoutCell(for: indexPath)
+            }
         case .none:
             return UITableViewCell()
         }
@@ -340,11 +359,29 @@ class SettingsViewController: UITableViewController {
         case .about:
             showAboutSettings()
         case .account:
-            guard isLoggedIn else { return }
-            confirmLogout()
+            let rows = visibleAccountRows
+            guard rows.indices.contains(indexPath.row) else { return }
+            switch rows[indexPath.row] {
+            case .management:
+                navigationController?.pushViewController(AccountManagementViewController(vaultStore: accountVaultStore), animated: true)
+            case .logout:
+                guard isLoggedIn else { return }
+                confirmLogout()
+            }
         case .none:
             break
         }
+    }
+
+    private var visibleAccountRows: [AccountRow] {
+        var rows: [AccountRow] = []
+        if isLoggedIn || accountVaultStore.accounts.isEmpty == false {
+            rows.append(.management)
+        }
+        if isLoggedIn {
+            rows.append(.logout)
+        }
+        return rows
     }
 
     private func cacheCell(for indexPath: IndexPath) -> UITableViewCell {
@@ -368,6 +405,8 @@ class SettingsViewController: UITableViewController {
             return categoryPreferencesCell(for: indexPath)
         case .homeSearchEntry:
             return homeSearchEntryCell(for: indexPath)
+        case .sortPreferences:
+            return sortPreferencesCell()
         case .textSize:
             return textSizeCell(for: indexPath)
         case .signatureDisplay:
@@ -515,6 +554,18 @@ class SettingsViewController: UITableViewController {
         return cell
     }
 
+    private func sortPreferencesCell() -> UITableViewCell {
+        let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+        cell.textLabel?.textColor = ReadingColors.text
+        cell.textLabel?.text = NSLocalizedString("sort.title", tableName: "PostList", comment: "")
+        cell.detailTextLabel?.text = sortPreferenceStore.sortMode.accessibilityTitle
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.imageView?.image = UIImage(systemName: "arrow.up.arrow.down")
+        cell.accessoryType = .disclosureIndicator
+        cell.accessibilityIdentifier = "settings-post-list-sort-cell"
+        return cell
+    }
+
     private func navigationLayoutCell() -> UITableViewCell {
         let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
         cell.textLabel?.textColor = ReadingColors.text
@@ -591,6 +642,22 @@ class SettingsViewController: UITableViewController {
         cell.imageView?.image = UIImage(systemName: "bell")
         cell.accessoryType = .disclosureIndicator
         cell.accessibilityIdentifier = "settings-push-notification-cell"
+
+        return cell
+    }
+
+    private func accountManagementCell(for indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+        cell.textLabel?.textColor = ReadingColors.text
+        cell.textLabel?.text = AccountsL10n.text("账号管理")
+        let count = accountVaultStore.accounts.count
+        cell.detailTextLabel?.text = count > 0
+            ? AccountsL10n.format("%d 个账号", count)
+            : AccountsL10n.text("未保存")
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.imageView?.image = UIImage(systemName: "person.2")
+        cell.accessoryType = .disclosureIndicator
+        cell.accessibilityIdentifier = "settings-account-management-cell"
 
         return cell
     }
@@ -718,6 +785,11 @@ class SettingsViewController: UITableViewController {
             navigationController?.pushViewController(LayoutChooserViewController(mode: .settings), animated: true)
         case .categoryPreferences:
             showPostCategoryPreferences()
+        case .sortPreferences:
+            navigationController?.pushViewController(
+                PostListSortSettingsViewController(store: sortPreferenceStore),
+                animated: true
+            )
         case .textSize:
             showTextSizeSettings()
         case .homeSearchEntry, .signatureDisplay, .imageDimming, .imageDimmingLevel, .none:
@@ -1091,6 +1163,7 @@ final class SettingsDebugViewController: UITableViewController {
         case detailTest
         #if DEBUG
         case debugLinks
+        case cloneAccountForTesting
         #endif
 
         static var visibleRows: [Row] {
@@ -1100,6 +1173,7 @@ final class SettingsDebugViewController: UITableViewController {
                 rows.append(.detailTest)
                 rows.append(.debugLinks)
             }
+            rows.append(.cloneAccountForTesting)
             #endif
             return rows
         }
@@ -1161,6 +1235,10 @@ final class SettingsDebugViewController: UITableViewController {
             cell.textLabel?.text = "调试链接"
             cell.imageView?.image = UIImage(systemName: "link")
             cell.accessibilityIdentifier = "settings-debug-links-cell"
+        case .cloneAccountForTesting:
+            cell.textLabel?.text = "克隆当前账号为测试分身"
+            cell.imageView?.image = UIImage(systemName: "person.2.badge.gearshape")
+            cell.accessibilityIdentifier = "settings-clone-account-cell"
         #endif
         }
         cell.accessoryType = .disclosureIndicator
@@ -1182,6 +1260,8 @@ final class SettingsDebugViewController: UITableViewController {
         case .debugLinks:
             guard NodeSeekDebugConfig.enablePostDetailTestEntry else { return }
             navigationController?.pushViewController(PostDetailDebugLinksViewController(), animated: true)
+        case .cloneAccountForTesting:
+            AccountsModule.cloneActiveAccountForTesting(in: self)
         #endif
         }
     }
@@ -1221,6 +1301,46 @@ final class PostDetailDebugLinksViewController: UITableViewController {
         tableView.backgroundColor = UIColor.systemGroupedBackground
         title = "调试链接"
         tableView.accessibilityIdentifier = "post-detail-debug-links-table-view"
+        var actions = [UIAction(title: "TextKit") { [weak self] _ in
+            self?.navigationController?.pushViewController(DetailMarkdownPrototypeController.demo(), animated: true)
+        }]
+        let targets = ["1067722", "917518"] + links.compactMap { $0.target?.post.id }
+        for id in targets {
+            actions.append(UIAction(title: "#\(id)") { [weak self] _ in
+                Task { await self?.openPrototypePost(id) }
+            })
+        }
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "TextKit", image: nil, primaryAction: nil, menu: UIMenu(children: actions))
+    }
+
+    private func showPrototype(id: String, source: DetailFloorSource) {
+        let page = DetailMarkdownPrototypeController(id: id, source: source)
+        navigationController?.pushViewController(page, animated: true)
+    }
+
+    private func openPrototypePost(_ id: String) async {
+        do {
+            switch try await NodeSeekService().loadPostDetail(postID: id) {
+            case .value(let detail):
+                let chooser = UIAlertController(title: detail.title, message: nil, preferredStyle: .actionSheet)
+                let floors = [("#0", id, DetailFloorSource(post: detail))] + detail.comments.map {
+                    ($0.floorText ?? $0.id, $0.id, DetailFloorSource(comment: $0))
+                }
+                for (label, floor, source) in floors {
+                    chooser.addAction(UIAlertAction(title: label, style: .default) { [weak self] _ in self?.showPrototype(id: floor, source: source) })
+                }
+                chooser.addAction(UIAlertAction(title: NSLocalizedString("cancel", tableName: "DetailPrototype", comment: ""), style: .cancel))
+                chooser.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItem
+                present(chooser, animated: true)
+            case .challenge(let challenge): showPrototypeError(challenge.logDescription)
+            }
+        } catch { showPrototypeError(error.localizedDescription) }
+    }
+
+    private func showPrototypeError(_ message: String) {
+        let alert = UIAlertController(title: "TextKit", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("close", tableName: "DetailPrototype", comment: ""), style: .default))
+        present(alert, animated: true)
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {

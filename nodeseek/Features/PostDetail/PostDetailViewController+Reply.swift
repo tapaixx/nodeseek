@@ -75,9 +75,44 @@ extension PostDetailViewController {
     }
 
     func updateReplyButtonVisibility() {
-        let isHidden = showsReplyEntry == false || displayMode != .content || replyEditorContainer.isHidden == false
+        let isEntryHidden = showsReplyEntry == false || displayMode != .content || replyEditorContainer.isHidden == false
+        // 竖排栏时（iPhone Duo 外屏等）评论入口改放进系统侧栏，底部评论栏不再占用本就不高的屏幕。
+        let isHidden = isEntryHidden || usesVerticalBar
+        updateVerticalReplyBarItem(visible: isEntryHidden == false && usesVerticalBar)
         replyButton.isHidden = isHidden
-        floatingReplyButtonContainer.isHidden = isHidden
+        replyBarView.isHidden = isHidden
+        replyBarFadeView.isHidden = isHidden || replyBarFadeView.isEnabled == false
+        if isHidden {
+            // 编辑器打开或页面不可评论时复位，下次出现总是完整评论栏。
+            setReplyBarCollapsed(false, animated: false)
+        }
+        updateReplyBarDraftPreview()
+        view.setNeedsLayout()
+    }
+
+    func updateVerticalReplyBarItem(visible: Bool) {
+        var items = navigationItem.rightBarButtonItems ?? []
+        let index = items.firstIndex { $0 === verticalReplyBarItem }
+        switch (visible, index) {
+        case (true, nil):
+            // rightBarButtonItems 首项竖排时在最下方，靠近拇指。
+            items.insert(verticalReplyBarItem, at: 0)
+        case (false, let index?):
+            items.remove(at: index)
+        default:
+            return
+        }
+        navigationItem.rightBarButtonItems = items
+    }
+
+    /// 收起编辑器后评论栏显示草稿首行，提醒还有未发送的内容。
+    func updateReplyBarDraftPreview() {
+        let draft = replyTextView.text?
+            .split(whereSeparator: \.isNewline)
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.isEmpty == false }
+        replyBarView.setDraft(draft.map { String($0) })
     }
 
     func presentReplyEditor(mode: CommentComposerMode) {
@@ -117,52 +152,39 @@ extension PostDetailViewController {
         allowCachedLogin: Bool = false,
         _ action: @escaping @MainActor () -> Void
     ) {
-        let startedAt = Date()
-        AppLog.info(.account, "登录检查开始: context=\(context), allowCachedLogin=\(allowCachedLogin)")
-        Task { @MainActor [weak self] in
-            guard let self else {
-                AppLog.warning(.account, "登录检查中止: context=\(context), reason=viewControllerReleased, elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-                return
-            }
-            AppLog.debug(.account, "登录检查进入 MainActor: context=\(context), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-            if allowCachedLogin,
-               let cachedAccount = await accountRefresher.cachedAccount() {
-                AppLog.info(.account, "登录检查缓存结果: context=\(context), isLoggedIn=\(cachedAccount.isLoggedIn), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-                if cachedAccount.isLoggedIn {
-                    AppLog.info(.account, "登录检查通过缓存，执行后续动作: context=\(context), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-                    action()
-                    refreshCachedAccountInBackground(context: context)
-                    return
-                }
-            } else if allowCachedLogin {
-                AppLog.info(.account, "登录检查无缓存账号: context=\(context), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-            }
+        checkLogin(context: context, allowCachedLogin: allowCachedLogin, afterLogin: false, action: action)
+    }
 
-            AppLog.info(.account, "登录检查开始刷新账号: context=\(context), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-            let account = await accountRefresher.refreshIfNeeded(force: false, maxAge: 60)
-            AppLog.info(.account, "登录检查刷新完成: context=\(context), isLoggedIn=\(account?.isLoggedIn == true), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-            if account?.isLoggedIn == true {
-                AppLog.info(.account, "登录检查刷新通过，执行后续动作: context=\(context), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
+    private func checkLogin(
+        context: String,
+        allowCachedLogin: Bool,
+        afterLogin: Bool,
+        action: @escaping @MainActor () -> Void
+    ) {
+        guard loginCheckTask == nil else { return }
+        loginCheckTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if !Task.isCancelled { loginCheckTask = nil }
+            }
+            if allowCachedLogin, await accountRefresher.cachedAccount()?.isLoggedIn == true {
+                guard !Task.isCancelled else { return }
                 action()
+                refreshCachedAccountInBackground(context: context)
                 return
             }
 
-            AppLog.warning(.account, "登录检查未通过，准备打开登录页: context=\(context), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
-            showToast(message: "请先登录 NodeSeek")
-            presentNodeSeekLogin {
-                let loginCloseStartedAt = Date()
-                AppLog.info(.account, "登录页关闭后开始强制刷新账号: context=\(context)")
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let account = await accountRefresher.refreshIfNeeded(force: true, maxAge: 0)
-                    AppLog.info(.account, "登录页关闭后账号刷新完成: context=\(context), isLoggedIn=\(account?.isLoggedIn == true), elapsedMs=\(AppLog.elapsedMilliseconds(since: loginCloseStartedAt))")
-                    if account?.isLoggedIn == true {
-                        AppLog.info(.account, "登录页关闭后登录通过，执行后续动作: context=\(context)")
-                        action()
-                    } else {
-                        AppLog.warning(.account, "登录页关闭后仍未登录: context=\(context)")
-                        showError(message: "请先登录 NodeSeek 后再继续。")
-                    }
+            let account = await accountRefresher.refreshIfNeeded(force: afterLogin, maxAge: afterLogin ? 0 : 60)
+            guard !Task.isCancelled else { return }
+            if account?.isLoggedIn == true {
+                action()
+            } else if afterLogin {
+                showError(message: "请先登录 NodeSeek 后再继续。")
+            } else {
+                showToast(message: "请先登录 NodeSeek")
+                LoginWebViewController.open(from: self) { [weak self] in
+                    // 登录页关闭前已保存确认过的账号，直接恢复最初的操作。
+                    self?.checkLogin(context: context, allowCachedLogin: true, afterLogin: true, action: action)
                 }
             }
         }
@@ -176,15 +198,6 @@ extension PostDetailViewController {
             _ = await accountRefresher.refreshIfNeeded(force: false, maxAge: 60)
             AppLog.debug(.account, "后台刷新缓存账号完成: context=\(context), elapsedMs=\(AppLog.elapsedMilliseconds(since: startedAt))")
         }
-    }
-
-    func presentNodeSeekLogin(onClose: @escaping @MainActor () -> Void) {
-        let loginViewController = LoginWebViewController(onClose: onClose)
-        if let navigationController {
-            navigationController.pushViewController(loginViewController, animated: true)
-            return
-        }
-        present(MessageNavigationController(rootViewController: loginViewController), animated: true)
     }
 
     nonisolated static func trimmedNonEmpty(_ text: String) -> String? {

@@ -181,6 +181,8 @@ class PostDetailPresenter: PostDetailPresenterProtocol {
     private var activeCommentPageRequest: CommentPageRequest?
     private var commentPageTracker = CommentPageTracker()
     private var currentDetail: PostDetail?
+    /// 跳页或刷新前已显示的分页状态；新页没加载成功时恢复，页面仍可续页和再跳页。
+    private var reloadRollback: (detail: PostDetail, page: Int, reloadPage: Int, nextPage: Int?, tracker: CommentPageTracker)?
     private var fallbackFavoriteCollectedState = false
     private var isSubmittingReply = false
     private var isSubmittingFavorite = false
@@ -239,11 +241,15 @@ class PostDetailPresenter: PostDetailPresenterProtocol {
         if let activeCommentPageRequest, activeCommentPageRequest.requestedPage != targetPage {
             staleInFlightPage = activeCommentPageRequest.requestedPage
         }
+        let previousReloadPage = reloadPage
         reloadPage = targetPage
-        reloadFromPage(targetPage)
+        reloadFromPage(targetPage, previousReloadPage: previousReloadPage)
     }
 
-    private func reloadFromPage(_ page: Int) {
+    private func reloadFromPage(_ page: Int, previousReloadPage: Int? = nil) {
+        if let currentDetail {
+            reloadRollback = (currentDetail, currentPage, previousReloadPage ?? reloadPage, nextCommentPage, commentPageTracker)
+        }
         view?.showLoading()
         activeCommentPageRequest = nil
         nextCommentPage = nil
@@ -257,28 +263,36 @@ class PostDetailPresenter: PostDetailPresenterProtocol {
         router.navigateToLogin { [weak self] in
             self?.view?.showLoading()
             guard let self else { return }
+            self.interactor.invalidateThreadedReplySession()
             self.interactor.loadPostDetail(page: self.currentPage)
         }
     }
 
-    func didApproachCommentEnd() {
+    func didTapThreadedReplies(for comment: Comment) {
+        guard let coordinator = interactor.threadedReplyCoordinator else { return }
+        router.presentThreadedReplies(rootComment: comment, coordinator: coordinator)
+    }
+
+    @discardableResult
+    func didApproachCommentEnd() -> Bool {
         guard let page = nextCommentPage else {
             AppLog.debug(.postDetail, "忽略详情评论加载更多: 已无下一页")
-            return
+            return false
         }
         guard activeCommentPageRequest == nil else {
             AppLog.debug(.postDetail, "忽略详情评论加载更多: 正在加载 page=\(activeCommentPageRequest?.requestedPage ?? -1)")
-            return
+            return false
         }
         guard currentDetail != nil else {
             AppLog.debug(.postDetail, "忽略详情评论加载更多: 详情尚未完成首屏加载")
-            return
+            return false
         }
 
         activeCommentPageRequest = .append(page: page)
         AppLog.info(.postDetail, "触发详情评论加载更多: page=\(page)")
         view?.showLoadingMoreComments()
         interactor.loadPostDetail(page: page)
+        return true
     }
 
     func didTapRefreshCommentsAtEnd() {
@@ -664,6 +678,7 @@ extension PostDetailPresenter: PostDetailInteractorOutput {
         }
         favoriteRollbackDetail = nil
         favoriteRollbackCollectedState = nil
+        reloadRollback = nil
         let commentRequest = activeCommentPageRequest
         activeCommentPageRequest = nil
         let loadedPage = max(1, response.detail.page)
@@ -692,7 +707,9 @@ extension PostDetailPresenter: PostDetailInteractorOutput {
         if let logReason = handling.logReason {
             AppLog.debug(.postDetail, "详情评论页请求完成: reason=\(logReason), page=\(loadedPage), pageSizeHint=\(commentPageSizeHint ?? -1)")
         }
-        if handling.shouldToastNoNewComments {
+        if case .refreshCurrent = commentRequest, nextCommentPage != nil {
+            didApproachCommentEnd()
+        } else if handling.shouldToastNoNewComments {
             AppLog.info(.postDetail, "详情评论到底更新无新评论: page=\(loadedPage), count=\(response.detail.comments.count)")
             view?.showToast(message: "暂无新评论")
         }
@@ -803,6 +820,7 @@ extension PostDetailPresenter: PostDetailInteractorOutput {
         activeCommentPageRequest = nil
         nextCommentPage = nil
         commentPageTracker.reset()
+        interactor.invalidateThreadedReplySession()
         view?.hideLoadingMoreComments()
         view?.hideLoading()
         view?.renderLoginRequired(message: message)
@@ -817,12 +835,24 @@ extension PostDetailPresenter: PostDetailInteractorOutput {
             view?.showFailureToast(message: "更多评论加载失败")
             return
         }
+        // 先恢复再收起加载：收起时页面会立即检查是否续页。
+        if failedRequest == nil { restoreReloadRollback() }
         view?.hideLoading()
         if case .replyRefresh = failedRequest {
             return
         } else {
             view?.showError(message: error)
         }
+    }
+
+    private func restoreReloadRollback() {
+        guard let rollback = reloadRollback else { return }
+        reloadRollback = nil
+        currentDetail = rollback.detail
+        currentPage = rollback.page
+        reloadPage = rollback.reloadPage
+        nextCommentPage = rollback.nextPage
+        commentPageTracker = rollback.tracker
     }
 
     func didCancelLoadPostDetail() {
@@ -832,6 +862,7 @@ extension PostDetailPresenter: PostDetailInteractorOutput {
             view?.hideLoadingMoreComments()
             return
         }
+        if cancelledRequest == nil { restoreReloadRollback() }
         view?.hideLoading()
     }
 

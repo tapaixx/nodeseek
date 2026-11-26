@@ -5,7 +5,6 @@
 //  Created by Codex on 2026/4/30.
 //
 
-import AsyncDisplayKit
 import SafariServices
 import UIKit
 
@@ -88,6 +87,8 @@ extension PostDetailViewController {
             showDetailDestination(viewController)
         case .userProfile(let url):
             openUserInfo(profileURL: url)
+        case .memberName(let name, let url):
+            openMember(named: name, fallbackURL: url)
         case .web(let url):
             let webViewController = NodeSeekWebViewController(url: url)
             showDetailDestination(webViewController)
@@ -114,6 +115,7 @@ extension PostDetailViewController {
 
         let sheet = LinkSelectionSheetViewController(
             candidates: uniqueCandidates,
+            presentingTraits: traitCollection,
             onSelect: { [weak self] url in
                 self?.handleContentLinkTap(url)
             }
@@ -133,8 +135,7 @@ extension PostDetailViewController {
     func handleLoadedCommentAnchorIfNeeded(for url: URL) -> Bool {
         guard let anchorID = currentPostCommentAnchorID(from: url),
               anchorID != "0",
-              let comment = loadedComment(matchingAnchorID: anchorID),
-              let indexPath = indexPathForLoadedComment(comment) else {
+              let (comment, indexPath) = loadedCommentLocation(matching: anchorID) else {
             return false
         }
 
@@ -167,26 +168,23 @@ extension PostDetailViewController {
         return route.anchorID
     }
 
-    private func loadedComment(matchingAnchorID anchorID: String) -> Comment? {
-        let normalizedTarget = normalizedAnchorText(anchorID)
-        guard normalizedTarget.isEmpty == false else { return nil }
-        return comments.first { comment in
-            normalizedAnchorText(comment.anchorID) == normalizedTarget
-                || normalizedAnchorText(comment.floorText) == normalizedTarget
+    private func loadedCommentLocation(matching anchorID: String) -> (Comment, IndexPath)? {
+        let target = normalizedAnchorText(anchorID)
+        guard !target.isEmpty else { return nil }
+        var match: (Comment, IndexPath)?
+        for (row, detailRow) in detailRows.enumerated() {
+            guard case .comment(let index) = detailRow else { continue }
+            let comment = comments[index]
+            guard normalizedAnchorText(comment.anchorID) == target || normalizedAnchorText(comment.floorText) == target else { continue }
+            let location = (comment, IndexPath(row: row, section: 0))
+            // 首页置顶副本也可能没有热评标记。续页后的同楼普通回复才处在连续的阅读位置。
+            if !comment.isHot {
+                match = location
+            } else if match == nil {
+                match = location
+            }
         }
-    }
-
-    private func indexPathForLoadedComment(_ comment: Comment) -> IndexPath? {
-        guard let commentIndex = comments.firstIndex(where: { $0.id == comment.id }),
-              let row = detailRows.firstIndex(where: {
-                  if case .comment(let index) = $0 {
-                      return index == commentIndex
-                  }
-                  return false
-              }) else {
-            return nil
-        }
-        return IndexPath(row: row, section: 0)
+        return match
     }
 
     private func isLoadedCommentVisible(anchorID: String, indexPath: IndexPath) -> Bool {
@@ -195,7 +193,7 @@ extension PostDetailViewController {
             return testVisibleAnchorIDs.contains(normalizedAnchorText(anchorID))
         }
         #endif
-        return tableNode.indexPathsForVisibleRows().contains(indexPath)
+        return collectionList.view.indexPathsForVisibleItems.contains(indexPath)
     }
 
     private func presentLoadedCommentPreview(comment: Comment, anchorID: String) {
@@ -207,17 +205,9 @@ extension PostDetailViewController {
         testPresentedPreviewUsesBottomSheet = true
         testPresentedPreviewShowsFullPostButton = wasOpenedFromInitialAnchor
         #endif
-        let renderedContent = commentRenderedCache[comment.id] ?? Self.makeRenderedContent(
-            html: comment.contentHTML,
-            signatureHTML: comment.signatureHTML,
-            baseURL: baseURL,
-            maxImageWidth: availableCommentContentWidth,
-            showsSignature: PostSignatureDisplaySettings.shared.showsSignatures
-        )
-
         let previewController = LoadedCommentPreviewViewController(
             comment: comment,
-            renderedContent: renderedContent,
+            baseURL: baseURL,
             showsFullPostButton: wasOpenedFromInitialAnchor,
             onOpenFullPost: { [weak self] in
                 self?.openFullPostFromFloorPreview()
@@ -230,7 +220,6 @@ extension PostDetailViewController {
         )
         let preferredSize = LoadedCommentPreviewViewController.preferredSize(
             comment: comment,
-            renderedContent: renderedContent,
             containerSize: view.bounds.size
         )
         previewController.overrideUserInterfaceStyle = traitCollection.userInterfaceStyle
@@ -243,8 +232,8 @@ extension PostDetailViewController {
             let detentID = UISheetPresentationController.Detent.Identifier("floor-preview")
             if #available(iOS 16.0, *) {
                 sheet.detents = [
-                    .custom(identifier: detentID) { _ in
-                        preferredSize.height
+                    .custom(identifier: detentID) { [weak previewController] _ in
+                        previewController?.preferredContentSize.height ?? preferredSize.height
                     }
                 ]
                 sheet.selectedDetentIdentifier = detentID
@@ -319,6 +308,33 @@ extension PostDetailViewController {
         showDetailDestination(viewController)
     }
 
+    /// 本页楼主或回复者里有同名用户时直接用其主页链接；否则按名字查 uid，查不到再打开网页。
+    func openMember(named name: String, fallbackURL: URL) {
+        let authors = [(currentHeaderContent?.authorName, currentHeaderContent?.authorProfileURL)]
+            + comments.map { ($0.authorName, $0.authorProfileURL) }
+        // 只认最后一次点击：之前还在查的名字作废，晚到的结果不再打开页面。
+        memberLookupTask?.cancel()
+        memberLookupTask = nil
+        if let url = authors.first(where: { $0.0?.caseInsensitiveCompare(name) == .orderedSame && $0.1.flatMap(UserProfileRouter.nativeUID) != nil })?.1 {
+            openUserInfo(profileURL: url)
+            return
+        }
+        let finder = memberFinder
+        memberLookupTask = Task { [weak self] in
+            let records = try? await finder.findMembers(keyword: name)
+            guard let self, !Task.isCancelled else { return }
+            memberLookupTask = nil
+            // 查询期间用户已离开详情页或打开了别的页面，就不再跳转。
+            guard (navigationController?.topViewController ?? self) === self, presentedViewController == nil else { return }
+            // 搜索是模糊匹配，只认名字完全相同（忽略大小写）的那一位。
+            if let uid = records?.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.uid {
+                showDetailDestination(UserProfileViewController(uid: uid))
+            } else {
+                showDetailDestination(NodeSeekWebViewController(url: fallbackURL))
+            }
+        }
+    }
+
     func consumeInitialAnchorIfNeeded() {
         guard let anchorID = pendingInitialAnchorID else { return }
         pendingInitialAnchorID = nil
@@ -335,30 +351,12 @@ extension PostDetailViewController {
         testHighlightedAnchorID = normalizedAnchorText(anchorID)
         testPresentedLoadedCommentID = nil
         #endif
-        tableNode.scrollToRow(at: indexPath, at: .middle, animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self else { return }
-            switch self.tableNode.nodeForRow(at: indexPath) {
-            case let node as PostBodyCellNode:
-                node.flashAnchorHighlight()
-            case let node as CommentCellNode:
-                node.flashAnchorHighlight()
-            default:
-                break
-            }
-        }
+        collectionList.scrollToAnchor(at: indexPath.row)
     }
 
     func indexPathForCurrentPageAnchor(_ anchorID: String) -> IndexPath? {
-        if let commentIndex = comments.firstIndex(where: { comment in
-            comment.anchorID == anchorID || comment.floorText == "#\(anchorID)"
-        }), let row = detailRows.firstIndex(where: {
-            if case .comment(let index) = $0 {
-                return index == commentIndex
-            }
-            return false
-        }) {
-            return IndexPath(row: row, section: 0)
+        if let (_, path) = loadedCommentLocation(matching: anchorID) {
+            return path
         }
 
         guard anchorID == "0", currentHeaderContent != nil,

@@ -10,6 +10,7 @@
 - 注释偏向中文，并强调减少中英混杂。
 
 ## 2. 工作方式
+- 用户单独发送 `adhoc` 时，直接按 [NodeSeek IPA 内测技能](.agents/skills/nodeseek-ipa-beta/SKILL.md) 打包并上传当前工作区，成功后只回复安装链接。
 - 面对复杂任务，先理解、分解、规划，再动手。
 - 不要未经准备就大范围同时改动多个模块。
 - 强调 "Slow as Fast" 的做事方式。
@@ -26,6 +27,15 @@
 - 避免在界面代码里直接写固定的黑白色或硬编码 RGB 颜色，除非确实是品牌色、状态色或业务语义色。
 - 如果系统颜色无法满足设计需要，应优先在 Assets 中定义支持 Light/Dark variants 的自定义颜色，再在代码中引用。
 - 新版本功能介绍页的内容与样式约束见 `docs/project-overview.md` 的「8. 新功能介绍页」。
+
+### iPhone Duo 适配
+
+新增或修改页面时，至少做第 1、4 步。改到操作入口或手动计算宽度的布局时，再做对应步骤。
+
+1. **把内容放进可用区域。** 在页面根视图上，将列表或正文容器的 `leadingAnchor`、`trailingAnchor` 分别约束到 `view.safeAreaLayoutGuide` 的同名边缘。子视图沿容器排版即可。独立覆盖在页面上的空态、悬浮按钮和编辑器也要对齐安全区，背景可以铺满。侧栏在哪一边、占多宽都交给系统计算。
+2. **有底部主操作时，明确竖栏和横栏各从哪里进入。** 以「写评论」为例：竖栏时收起底部评论栏，把带图标和本地化标题的 `UIBarButtonItem` 放入 `navigationItem`，点击后打开原编辑器；恢复横栏时移除该按钮，恢复底部入口。iOS 27.1+ 用 `traitCollection.verticalBarEdge != .unspecified` 判断竖栏，旧系统走原布局。页面首次加载时更新一次，再用 `registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge)` 监听变化并调用同一更新方法。可参照首页的 [applyComposeEntryPlacement()](nodeseek/Features/PostList/PostListViewController.swift)。
+3. **手算宽度时，量实际显示内容的视图。** 例如楼层预览取列表布局后的 `bounds.width`。开合、旋转或分屏导致宽度变化时，用新宽度重新测量文本，并更新依赖旧宽度的缓存。宽屏长文可用 `readableContentGuide` 控制行长；半折叠时，自定义浮层还要避开系统保留区域。
+4. **在模拟器上走一遍改过的路径。** 先在普通 iPhone 打开页面，再在 Duo 外屏打开同一页，检查正文两端、空态和主要按钮是否完整可见，实际点一次主要操作。改了入口或阅读布局，就停在当前页展开再合上，确认入口每次只有一个、仍能点，帖子和阅读位置保留。改了编辑器，就从页面入口输入几个字，确认软件键盘弹出后仍看得到输入文字和提交按钮，开合后草稿仍在。未实测的状态在交付时列明。设备操作见 [Duo 模拟器说明](docs/plans/iphone-duo-adaptation.md)。
 
 ### 键盘与输入
 - 新增或修改输入页面时，明确键盘出现后的可见区域、输入框切换、提交与收起方式；必要时使用 keyboardLayoutGuide，避免键盘遮挡当前输入和主要操作。
@@ -64,17 +74,21 @@
 - 常用 `type`：`feat`、`fix`、`ui`、`test`、`build`、`ci`、`docs`、`refactor`、`chore`。
 - 中文摘要写具体行为或结果，避免 `更新`、`修复问题`、`杂项改动` 这类模糊描述。
 - 一次提交只表达一个主要改动；跨 UI、发布流程、测试的无关改动不要混在同一条 commit 里。
+- `main` 分支按「完整功能 / 独立修复」沉淀提交：特性分支开发期可小步提交，合入 `main` 时优先用 `squash merge` 压成 1 条（或按大阶段 2～3 条）完整提交，避免把未上线功能的开发期修补与反复微调带入主线。
+- 同一功能或修复配套的单测与文档随代码一起提交，不必强行拆成多条 commit；未推送前的反复试错与已撤回尝试在定稿后合并，只保留最终生效的结果。
+- 彼此无关的线上 bugfix，以及纯重构与行为改动仍保持独立提交，便于单独回退与排查回归。
 
 ## 8. 自检要求
 - 完成前自查语法、依赖、导入、低级错误。
 - 涉及编译、测试、类型检查或接口变更时，应尽量做验证并汇报结果。
+- 发布前 E2E 用 `make e2e-list` 按功能查编号，再用 `make e2e-case CASE=<编号>` 单跑。账号条件和验收方式见 [NodeSeek E2E 技能](.agents/skills/nodeseek-e2e/SKILL.md)。
 - 模拟器测试用 `make xcode-test-class TEST="类名 ..."` 等 make 目标，不要手写 `xcodebuild test`/`test-without-building`，原因见 `docs/project-overview.md`「常用验证命令」。
 
 ### 模拟器操作经验
 - `make xcode-test-class` 默认用 iPhone 16 / iOS 18.0，本机没有时传 `SIMULATOR_ID=<UDID>`（用 `xcrun simctl list devices available` 查）。
 - `TEST` 只接受类名（Makefile 会拒绝 `类名/方法名`），需要看单个方法时按类名跑，再从 `.build/XcodeDerivedData/Logs/Test/` 最新的 `.xcresult` 用 `xcrun xcresulttool get test-results tests --path <路径>` 读失败信息。
 - 构建会自动改动 `Package.resolved`（删掉部分 Google 依赖条目），与本次改动无关时还原，不要提交。
-- 本机没有 Simulator.app，模拟器只能在后台运行；用 `axe` 点击时必须加 `--tap-style physical`，默认方式不生效。滑动用 `axe swipe` 正常。
+- 本机 Xcode 27.2 用 Device Hub 查看模拟器。运行 `open -a /Applications/Xcode.app/Contents/Applications/DeviceHub.app`，在侧栏选中测试使用的设备即可实时观看。用 `axe` 点击时加 `--tap-style physical`，滑动用 `axe swipe`。
 - `axe describe-ui` 读不到帖子和评论正文（富文本），只能拿到按钮、楼层号等；点正文需截图（`xcrun simctl io <UDID> screenshot`）后按坐标点，屏幕点数 = 截图像素 ÷ 3。
 - 安装最新构建：`make xcode-build-tests` 后 `xcrun simctl install <UDID> .build/XcodeDerivedData/Build/Products/Debug-iphonesimulator/nodeseek.app`。
 - make 构建带 `CODE_SIGNING_ALLOWED=NO`，App 没有 Keychain 权限，写入返回 -34018，Key 存不进去。要验证依赖 Keychain 的流程（如保存 NodeImage Key），改用 `xcodebuild build`（不带该参数，另设 `-derivedDataPath .build/SignedSimDerivedData`）让 Xcode 自动签名后安装；用 `codesign` 手动重签的包模拟器会拒绝启动。

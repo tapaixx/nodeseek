@@ -39,18 +39,18 @@ struct SettingsViewControllerTests {
             viewController.loadViewIfNeeded()
             viewController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
             viewController.view.layoutIfNeeded()
-            try await waitUntil { viewController.tableView.numberOfRows(inSection: 6) == 1 }
+            try await waitUntil { viewController.tableView.numberOfRows(inSection: 6) == 2 }
 
             let tableView = try #require(viewController.tableView)
             #expect(viewController.title == "设置")
             #expect(tableView.numberOfSections == 7)
-            #expect(tableView.numberOfRows(inSection: 0) == 7)
+            #expect(tableView.numberOfRows(inSection: 0) == 8)
             #expect(tableView.numberOfRows(inSection: 1) == 4)
             #expect(tableView.numberOfRows(inSection: 2) == 1)
             #expect(tableView.numberOfRows(inSection: 3) == 1)
             #expect(tableView.numberOfRows(inSection: 4) == 1)
             #expect(tableView.numberOfRows(inSection: 5) == 1)
-            #expect(tableView.numberOfRows(inSection: 6) == 1)
+            #expect(tableView.numberOfRows(inSection: 6) == 2)
             #expect(tableView.dataSource?.tableView?(tableView, titleForHeaderInSection: 0) == "阅读")
             #expect(tableView.dataSource?.tableView?(tableView, titleForHeaderInSection: 1) == "功能")
             #expect(tableView.dataSource?.tableView?(tableView, titleForHeaderInSection: 2) == "通知")
@@ -84,7 +84,7 @@ struct SettingsViewControllerTests {
             ))
             let textSizeCell = try #require(tableView.dataSource?.tableView(
                 tableView,
-                cellForRowAt: IndexPath(row: 3, section: 0)
+                cellForRowAt: IndexPath(row: 4, section: 0)
             ))
             let searchEntryCell = try #require(tableView.dataSource?.tableView(
                 tableView,
@@ -92,7 +92,7 @@ struct SettingsViewControllerTests {
             ))
             let signatureCell = try #require(tableView.dataSource?.tableView(
                 tableView,
-                cellForRowAt: IndexPath(row: 4, section: 0)
+                cellForRowAt: IndexPath(row: 5, section: 0)
             ))
             let debugCell = try #require(tableView.dataSource?.tableView(
                 tableView,
@@ -102,9 +102,13 @@ struct SettingsViewControllerTests {
                 tableView,
                 cellForRowAt: IndexPath(row: 0, section: 5)
             ))
-            let logoutCell = try #require(tableView.dataSource?.tableView(
+            let accountManagementCell = try #require(tableView.dataSource?.tableView(
                 tableView,
                 cellForRowAt: IndexPath(row: 0, section: 6)
+            ))
+            let logoutCell = try #require(tableView.dataSource?.tableView(
+                tableView,
+                cellForRowAt: IndexPath(row: 1, section: 6)
             ))
 
             #expect(cacheCell.textLabel?.text == "清除缓存")
@@ -135,6 +139,8 @@ struct SettingsViewControllerTests {
             #expect(debugCell.accessoryType == .disclosureIndicator)
             #expect(aboutCell.textLabel?.text == "关于")
             #expect(aboutCell.accessoryType == .disclosureIndicator)
+            #expect(accountManagementCell.textLabel?.text == "账号管理")
+            #expect(accountManagementCell.accessoryType == .disclosureIndicator)
             #expect(logoutCell.textLabel?.text == "退出登录")
             #expect(logoutCell.textLabel?.textColor == .systemRed)
         }
@@ -164,10 +170,12 @@ struct SettingsViewControllerTests {
     @Test func settingsPageHidesLogoutWhenNotLoggedIn() async throws {
         let defaults = try #require(UserDefaults(suiteName: "settings-account-\(UUID().uuidString)"))
         let accountStore = CurrentAccountStore(userDefaults: defaults, storageKey: "account")
+        let vaultStore = AccountVaultStore(userDefaults: defaults)
         let viewController = SettingsViewController(
             cacheManager: FakeSettingsCacheManager(cacheByteSize: 4_096),
             sessionManager: FakeSettingsSessionManager(),
             currentAccountStore: accountStore,
+            accountVaultStore: vaultStore,
             nodeImageAPIKeyStore: FakeNodeImageAPIKeyStore()
         )
 
@@ -190,13 +198,13 @@ struct SettingsViewControllerTests {
         )
         controller.loadViewIfNeeded()
         let tableView = try #require(controller.tableView)
-        let cell = controller.tableView(tableView, cellForRowAt: IndexPath(row: 5, section: 0))
+        let cell = controller.tableView(tableView, cellForRowAt: IndexPath(row: 6, section: 0))
         let control = try #require(cell.accessoryView as? UISwitch)
         #expect(cell.textLabel?.text == "深色模式图片变暗")
         #expect(control.isOn)
-        #expect(tableView.numberOfRows(inSection: 0) == 7)
+        #expect(tableView.numberOfRows(inSection: 0) == 8)
 
-        let levelCell = controller.tableView(tableView, cellForRowAt: IndexPath(row: 6, section: 0))
+        let levelCell = controller.tableView(tableView, cellForRowAt: IndexPath(row: 7, section: 0))
         let levelControl = try #require(levelCell.accessoryView as? UISegmentedControl)
         #expect(levelCell.textLabel?.text == "变暗程度")
         #expect(levelControl.numberOfSegments == 3)
@@ -208,11 +216,11 @@ struct SettingsViewControllerTests {
         control.isOn = false
         control.sendActions(for: .valueChanged)
         #expect(!DetailImageDimmingSettings(userDefaults: defaults).isEnabled)
-        #expect(tableView.numberOfRows(inSection: 0) == 6)
+        #expect(tableView.numberOfRows(inSection: 0) == 7)
         control.isOn = true
         control.sendActions(for: .valueChanged)
         #expect(DetailImageDimmingSettings(userDefaults: defaults).isEnabled)
-        #expect(tableView.numberOfRows(inSection: 0) == 7)
+        #expect(tableView.numberOfRows(inSection: 0) == 8)
         #expect(DetailImageDimmingSettings(userDefaults: defaults).level == .strong)
     }
 
@@ -241,7 +249,7 @@ struct SettingsViewControllerTests {
 
         let cell = try #require(viewController.tableView.dataSource?.tableView(
             viewController.tableView,
-            cellForRowAt: IndexPath(row: 4, section: 0)
+            cellForRowAt: IndexPath(row: 5, section: 0)
         ))
         let signatureSwitch = try #require(cell.accessoryView as? UISwitch)
         #expect(signatureSwitch.isOn == true)
@@ -250,6 +258,72 @@ struct SettingsViewControllerTests {
         signatureSwitch.sendActions(for: .valueChanged)
 
         #expect(signatureSettings.showsSignatures == false)
+    }
+
+    @Test func homeSortPreferencesPersistIndependentlyAndReflectExternalChanges() throws {
+        let suite = "settings-sort-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = PostListSortPreferenceStore(userDefaults: defaults)
+        let controller = PostListSortSettingsViewController(store: store)
+        controller.loadViewIfNeeded()
+        let table = try #require(controller.tableView)
+        #expect(table.tintColor == .label)
+        #expect(table.accessibilityIdentifier == "settings-post-list-sort-table-view")
+        let switchRow = controller.tableView(table, cellForRowAt: IndexPath(row: 0, section: 0))
+        let toggle = try #require(switchRow.accessoryView as? UISwitch)
+        #expect(toggle.accessibilityIdentifier == "settings-post-list-sort-show-switch")
+        #expect(toggle.isOn)
+        toggle.isOn = false
+        toggle.sendActions(for: .valueChanged)
+        let postRow = IndexPath(row: 0, section: 1)
+        controller.tableView(table, didSelectRowAt: postRow)
+        let reopenedStore = PostListSortPreferenceStore(userDefaults: defaults)
+        #expect(!reopenedStore.showsHomeControl)
+        #expect(reopenedStore.sortMode == .postTime)
+        #expect(controller.tableView(table, cellForRowAt: postRow).accessoryType == .checkmark)
+        reopenedStore.sortMode = .replyTime
+        controller.beginAppearanceTransition(true, animated: false)
+        controller.endAppearanceTransition()
+        #expect(controller.tableView(table, cellForRowAt: postRow).accessoryType == .none)
+        #expect(controller.tableView(table, cellForRowAt: IndexPath(row: 1, section: 1)).accessoryType == .checkmark)
+    }
+
+    @Test func settingsPageShowsHomeSortSummaryAndPushesSortSettingsWithInjectedStore() throws {
+        let sortStore = InMemoryPostListSortPreferenceStore()
+        sortStore.sortMode = .postTime
+        let viewController = SettingsViewController(
+            cacheManager: FakeSettingsCacheManager(cacheByteSize: 0),
+            sessionManager: FakeSettingsSessionManager(),
+            nodeImageAPIKeyStore: FakeNodeImageAPIKeyStore(),
+            sortPreferenceStore: sortStore
+        )
+        let navigationController = UINavigationController(rootViewController: viewController)
+        viewController.loadViewIfNeeded()
+
+        let indexPath = IndexPath(row: 3, section: 0)
+        let cell = try #require(viewController.tableView.dataSource?.tableView(
+            viewController.tableView,
+            cellForRowAt: indexPath
+        ))
+        #expect(cell.accessibilityIdentifier == "settings-post-list-sort-cell")
+        #expect(cell.textLabel?.textColor == ReadingColors.text)
+        #expect(cell.detailTextLabel?.text == PostListSortMode.postTime.accessibilityTitle)
+        #expect(cell.accessoryType == .disclosureIndicator)
+
+        viewController.tableView.delegate?.tableView?(viewController.tableView, didSelectRowAt: indexPath)
+        let pushed = try #require(navigationController.topViewController as? PostListSortSettingsViewController)
+        pushed.loadViewIfNeeded()
+        let pushedTable = try #require(pushed.tableView)
+        pushed.tableView(pushedTable, didSelectRowAt: IndexPath(row: 1, section: 1))
+        #expect(sortStore.sortMode == .replyTime)
+
+        viewController.viewWillAppear(false)
+        let refreshedCell = try #require(viewController.tableView.dataSource?.tableView(
+            viewController.tableView,
+            cellForRowAt: indexPath
+        ))
+        #expect(refreshedCell.detailTextLabel?.text == PostListSortMode.replyTime.accessibilityTitle)
     }
 
     @Test func postListSearchEntryDefaultsToDisabledWhenUnset() throws {
@@ -338,7 +412,7 @@ struct SettingsViewControllerTests {
 
         viewController.tableView.delegate?.tableView?(
             viewController.tableView,
-            didSelectRowAt: IndexPath(row: 3, section: 0)
+            didSelectRowAt: IndexPath(row: 4, section: 0)
         )
 
         #expect(navigationController.topViewController is SettingsTextSizeViewController)
@@ -700,6 +774,7 @@ struct SettingsViewControllerTests {
             cacheManager: cacheManager,
             sessionManager: sessionManager,
             currentAccountStore: accountStore,
+            accountVaultStore: AccountVaultStore(userDefaults: defaults),
             nodeImageAPIKeyStore: FakeNodeImageAPIKeyStore(),
             confirmsActionsImmediately: true,
             onLogout: {
@@ -707,11 +782,11 @@ struct SettingsViewControllerTests {
             }
         )
         viewController.loadViewIfNeeded()
-        try await waitUntil { viewController.tableView.numberOfRows(inSection: 6) == 1 }
+        try await waitUntil { viewController.tableView.numberOfRows(inSection: 6) == 2 }
 
         viewController.tableView.delegate?.tableView?(
             viewController.tableView,
-            didSelectRowAt: IndexPath(row: 0, section: 6)
+            didSelectRowAt: IndexPath(row: 1, section: 6)
         )
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -940,7 +1015,7 @@ struct SettingsViewControllerTests {
         #expect(cell.textLabel?.text == "NodeImage 授权")
     }
 
-    @Test func defaultSessionLogoutClearsNodeImageAuthorization() async throws {
+    @Test func logoutCleansSessionAgainAtLaunchUnlessLoginSucceeded() async throws {
         let nodeImageAPIKeyStore = FakeNodeImageAPIKeyStore()
         nodeImageAPIKeyStore.save(apiKey: "nodeimage-key")
         let defaults = try #require(UserDefaults(suiteName: "settings-session-\(UUID().uuidString)"))
@@ -953,13 +1028,27 @@ struct SettingsViewControllerTests {
                 allowedDomains: []
             ),
             currentAccountStore: accountStore,
-            nodeImageAPIKeyStore: nodeImageAPIKeyStore
+            nodeImageAPIKeyStore: nodeImageAPIKeyStore,
+            defaults: defaults
         )
 
+        #expect(manager.startPendingCleanup() == nil)
         await manager.logout()
+        // 退出登录不清空全局共用的 NodeImage API Key。
+        #expect(nodeImageAPIKeyStore.clearCount == 0)
+        #expect(nodeImageAPIKeyStore.apiKey() == "nodeimage-key")
 
-        #expect(nodeImageAPIKeyStore.clearCount == 1)
-        #expect(nodeImageAPIKeyStore.apiKey() == nil)
+        let member = AccountResponse(displayName: "测试账号", isLoggedIn: true)
+        await accountStore.save(AccountResponse(displayName: "游客", isLoggedIn: false))
+        let cleanup = try #require(manager.startPendingCleanup())
+        await cleanup.value
+        #expect(await accountStore.snapshot() == nil)
+        #expect(manager.startPendingCleanup() == nil)
+
+        await manager.logout()
+        await accountStore.save(member)
+        #expect(manager.startPendingCleanup() == nil)
+        #expect(await accountStore.snapshot()?.account == member)
     }
 }
 
@@ -1057,7 +1146,7 @@ private final class FakeSettingsSessionManager: SettingsSessionManaging {
     }
 }
 
-private final class FakeNodeImageAPIKeyStore: NodeImageAPIKeyStoring {
+final class FakeNodeImageAPIKeyStore: NodeImageAPIKeyStoring {
     private(set) var clearCount = 0
     private var storedAPIKey: String?
 

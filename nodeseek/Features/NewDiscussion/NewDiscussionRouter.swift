@@ -13,15 +13,19 @@ final class NewDiscussionRouter: NewDiscussionRouterProtocol {
         self.onPublished = onPublished
     }
 
+    private(set) static weak var activeDraftEditor: NewDiscussionViewController?
+
     /// 返回包好导航栏的发帖页，由调用方全屏弹出。
     static func createModule(
         draftStore: NewDiscussionDraftStoring = UserDefaultsNewDiscussionDraftStore(),
         submitter: NodeSeekDiscussionSubmitting = WebViewNodeSeekDiscussionSubmitter(),
+        initialDraft: NewDiscussionDraft = .init(),
         onPublished: @escaping (NodeSeekPostRoute?) -> Void
     ) -> UINavigationController {
         let router = NewDiscussionRouter(onPublished: onPublished)
-        let presenter = NewDiscussionPresenter(router: router, draftStore: draftStore, submitter: submitter)
+        let presenter = NewDiscussionPresenter(router: router, draftStore: draftStore, submitter: submitter, initialDraft: initialDraft)
         let view = NewDiscussionViewController(presenter: presenter)
+        activeDraftEditor = view
         presenter.view = view
         router.viewController = view
 

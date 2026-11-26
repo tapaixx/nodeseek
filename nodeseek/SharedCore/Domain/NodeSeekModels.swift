@@ -35,6 +35,21 @@ nonisolated struct AccountResponse: Equatable, Sendable {
         self.stats = stats
         self.notification = notification
     }
+
+    nonisolated var nodeSeekUID: Int? {
+        guard let profileURL else { return nil }
+        return NodeSeekUserIDResolver.uid(from: profileURL)
+    }
+}
+
+enum NodeSeekUserIDResolver {
+    nonisolated static func uid(from url: URL) -> Int? {
+        let components = url.pathComponents
+        guard let spaceIndex = components.firstIndex(of: "space") else { return nil }
+        let idIndex = components.index(after: spaceIndex)
+        guard idIndex < components.endIndex else { return nil }
+        return Int(components[idIndex])
+    }
 }
 
 nonisolated struct PostSummary: Equatable, Sendable {
@@ -50,6 +65,7 @@ nonisolated struct PostSummary: Equatable, Sendable {
     let isLocked: Bool
     let requiredReadingLevel: Int?
     let avatarURL: URL?
+    let authorProfileURL: URL?
 
     init(
         id: String,
@@ -63,7 +79,8 @@ nonisolated struct PostSummary: Equatable, Sendable {
         isPinned: Bool = false,
         isLocked: Bool = false,
         requiredReadingLevel: Int? = nil,
-        avatarURL: URL? = nil
+        avatarURL: URL? = nil,
+        authorProfileURL: URL? = nil
     ) {
         self.id = id
         self.title = title
@@ -77,6 +94,7 @@ nonisolated struct PostSummary: Equatable, Sendable {
         self.isLocked = isLocked
         self.requiredReadingLevel = requiredReadingLevel
         self.avatarURL = avatarURL
+        self.authorProfileURL = authorProfileURL
     }
 }
 
@@ -111,6 +129,7 @@ nonisolated struct PostDetail: Equatable, Sendable {
     let authorProfileURL: URL?
     let metadataText: String?
     let contentHTML: String
+    let visibleMarkdown: String?
     let signatureHTML: String?
     private(set) var likeCount: Int?
     private(set) var isLikeClicked: Bool
@@ -125,6 +144,7 @@ nonisolated struct PostDetail: Equatable, Sendable {
     private(set) var page: Int
     private(set) var pagination: PostDetailPagination?
     private(set) var isLastPage: Bool
+    private(set) var totalPages: Int?
 
     init(
         id: String,
@@ -138,6 +158,7 @@ nonisolated struct PostDetail: Equatable, Sendable {
         authorProfileURL: URL? = nil,
         metadataText: String?,
         contentHTML: String,
+        visibleMarkdown: String? = nil,
         signatureHTML: String? = nil,
         likeCount: Int? = nil,
         isLikeClicked: Bool = false,
@@ -151,7 +172,8 @@ nonisolated struct PostDetail: Equatable, Sendable {
         comments: [Comment],
         page: Int = 1,
         pagination: PostDetailPagination? = nil,
-        isLastPage: Bool? = nil
+        isLastPage: Bool? = nil,
+        totalPages: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -164,6 +186,7 @@ nonisolated struct PostDetail: Equatable, Sendable {
         self.authorProfileURL = authorProfileURL
         self.metadataText = metadataText
         self.contentHTML = contentHTML
+        self.visibleMarkdown = visibleMarkdown
         self.signatureHTML = signatureHTML
         self.likeCount = likeCount
         self.isLikeClicked = isLikeClicked
@@ -178,6 +201,8 @@ nonisolated struct PostDetail: Equatable, Sendable {
         self.page = max(1, page)
         self.pagination = pagination
         self.isLastPage = isLastPage ?? (pagination?.nextPage == nil)
+        let normalizedTotal = totalPages.flatMap { $0 > 0 ? $0 : nil }
+        self.totalPages = normalizedTotal ?? pagination?.items.map(\.page).max()
     }
 
     func updatingFavoriteState(count: Int?, isCollected: Bool) -> PostDetail {
@@ -241,13 +266,16 @@ nonisolated struct PostDetail: Equatable, Sendable {
     func replacingComments(
         _ nextComments: [Comment],
         page: Int,
-        pagination: PostDetailPagination?
+        pagination: PostDetailPagination?,
+        totalPages: Int? = nil
     ) -> PostDetail {
         var updated = self
         updated.comments = nextComments
         updated.page = max(1, page)
         updated.pagination = pagination
         updated.isLastPage = pagination?.nextPage == nil
+        let normalizedTotal = totalPages.flatMap { $0 > 0 ? $0 : nil }
+        updated.totalPages = normalizedTotal ?? updated.totalPages ?? pagination?.items.map(\.page).max()
         return updated
     }
 }
@@ -275,6 +303,7 @@ nonisolated struct Comment: Equatable, Sendable {
     /// 当前登录用户发的评论，可以编辑。
     let isOwnComment: Bool
     /// 页面配置里的原始 Markdown，引用时按网页逻辑逐行加 "> "；热评等不在当前页配置里的评论为 nil。
+    let hasVisibleMarkdown: Bool
     let markdown: String?
     let editedAtTitleText: String?
 
@@ -300,6 +329,7 @@ nonisolated struct Comment: Equatable, Sendable {
         isOpposeClicked: Bool = false,
         isOwnComment: Bool = false,
         markdown: String? = nil,
+        hasVisibleMarkdown: Bool = false,
         editedAtTitleText: String? = nil
     ) {
         self.id = id
@@ -323,6 +353,7 @@ nonisolated struct Comment: Equatable, Sendable {
         self.isOpposeClicked = isOpposeClicked
         self.isOwnComment = isOwnComment
         self.markdown = markdown
+        self.hasVisibleMarkdown = hasVisibleMarkdown
         self.editedAtTitleText = editedAtTitleText
     }
 
@@ -349,6 +380,7 @@ nonisolated struct Comment: Equatable, Sendable {
             isOpposeClicked: isOpposeClicked,
             isOwnComment: isOwnComment,
             markdown: markdown,
+            hasVisibleMarkdown: hasVisibleMarkdown,
             editedAtTitleText: editedAtTitleText
         )
     }
@@ -376,6 +408,7 @@ nonisolated struct Comment: Equatable, Sendable {
             isOpposeClicked: isOpposeClicked,
             isOwnComment: isOwnComment,
             markdown: markdown,
+            hasVisibleMarkdown: hasVisibleMarkdown,
             editedAtTitleText: editedAtTitleText
         )
     }
@@ -403,6 +436,7 @@ nonisolated struct Comment: Equatable, Sendable {
             isOpposeClicked: isClicked,
             isOwnComment: isOwnComment,
             markdown: markdown,
+            hasVisibleMarkdown: hasVisibleMarkdown,
             editedAtTitleText: editedAtTitleText
         )
     }

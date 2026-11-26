@@ -48,30 +48,74 @@ final class DefaultSettingsCacheManager: SettingsCacheManaging {
             modifiedSince: Date(timeIntervalSince1970: 0)
         )
     }
+
+    /// 切换账号或退出登录时清理 URLCache、WebKit 页面缓存以及 localStorage/sessionStorage（保留 Cookie）。
+    static func clearSessionWebCachesPreservingCookies() async {
+        URLCache.shared.removeAllCachedResponses()
+        let dataTypes: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeLocalStorage,
+            WKWebsiteDataTypeSessionStorage
+        ]
+        await WKWebsiteDataStore.default().removeData(
+            ofTypes: dataTypes,
+            modifiedSince: Date(timeIntervalSince1970: 0)
+        )
+    }
 }
 
 final class DefaultSettingsSessionManager: SettingsSessionManaging {
     private let cookieSession: NodeSeekCookieSessionManaging
     private let currentAccountStore: CurrentAccountStore
     private let nodeImageAPIKeyStore: NodeImageAPIKeyStoring
+    private let defaults: UserDefaults
+    private let usesMultiAccountCoordinator: Bool
 
     init(
         cookieBridge: CookieBridge? = nil,
         cookieSession: NodeSeekCookieSessionManaging? = nil,
         currentAccountStore: CurrentAccountStore = .shared,
-        nodeImageAPIKeyStore: NodeImageAPIKeyStoring = KeychainNodeImageAPIKeyStore()
+        nodeImageAPIKeyStore: NodeImageAPIKeyStoring = KeychainNodeImageAPIKeyStore(),
+        defaults: UserDefaults = .standard,
+        usesMultiAccountCoordinator: Bool? = nil
     ) {
+        let isDefaultConfiguration = cookieBridge == nil
+            && cookieSession == nil
+            && currentAccountStore === CurrentAccountStore.shared
+            && defaults === UserDefaults.standard
+        self.usesMultiAccountCoordinator = usesMultiAccountCoordinator ?? isDefaultConfiguration
         self.cookieSession = cookieSession ?? NodeSeekCookieSession(bridge: cookieBridge ?? CookieBridge())
         self.currentAccountStore = currentAccountStore
         self.nodeImageAPIKeyStore = nodeImageAPIKeyStore
+        self.defaults = defaults
+    }
+
+    // 退出时 Cookie 删除可能尚未落盘，进程就被终止。下次启动先补清，再预热 WebView。
+    func startPendingCleanup() -> Task<Void, Never>? {
+        guard defaults.bool(forKey: CurrentAccountStore.pendingLogoutCleanupKey) else { return nil }
+        return Task { @MainActor in
+            AppLog.debug(.account, "开始冷启动退出清理")
+            await clearLocalSession(atLaunch: true)
+            AppLog.debug(.account, "完成冷启动退出清理")
+        }
     }
 
     func logout() async {
         SiteVerificationCoordinator.shared.reset()
-        await cookieSession.clearLoginSession()
-        await currentAccountStore.clear()
-        nodeImageAPIKeyStore.clear()
+        if usesMultiAccountCoordinator {
+            _ = await AccountsModule.logoutCurrentAccount()
+            return
+        }
+        await clearLocalSession(atLaunch: false)
+        NotificationCenter.default.post(name: .nodeSeekAccountSessionDidChange, object: nil)
         NotificationCenter.default.post(name: .nodeSeekLoginSessionDidClose, object: nil)
+    }
+
+    private func clearLocalSession(atLaunch: Bool) async {
+        await currentAccountStore.beginLogoutCleanup()
+        await cookieSession.clearAccountSessionCookies()
+        await currentAccountStore.finishLogoutCleanup(atLaunch: atLaunch)
     }
 }
 

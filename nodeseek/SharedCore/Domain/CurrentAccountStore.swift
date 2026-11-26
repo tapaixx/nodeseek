@@ -15,6 +15,9 @@ actor CurrentAccountStore {
 
     nonisolated static let shared = CurrentAccountStore()
 
+    nonisolated static let pendingLogoutCleanupKey = "nodeSeekSession.pendingLogoutCleanup"
+    private(set) var sessionID: UUID? = UUID()
+
     private let userDefaults: UserDefaults
     private let storageKey: String
     private var cachedSnapshot: Snapshot?
@@ -33,9 +36,56 @@ actor CurrentAccountStore {
     }
 
     func save(_ account: AccountResponse, updatedAt: Date = Date()) {
+        guard sessionID != nil else { return }
+        if account.isLoggedIn {
+            userDefaults.removeObject(forKey: Self.pendingLogoutCleanupKey)
+        }
         let snapshot = Snapshot(account: account, updatedAt: updatedAt)
         cachedSnapshot = snapshot
         persist(snapshot)
+    }
+
+    // 退出之前发出的请求即使较晚返回，也不能用旧账号覆盖游客状态。
+    @discardableResult
+    func save(_ account: AccountResponse, for requestSessionID: UUID?) -> Bool {
+        guard let requestSessionID, requestSessionID == sessionID else { return false }
+        save(account)
+        return true
+    }
+
+    func beginLogoutCleanup() {
+        userDefaults.set(true, forKey: Self.pendingLogoutCleanupKey)
+        sessionID = nil
+        clear()
+    }
+
+    func finishLogoutCleanup(atLaunch: Bool) {
+        if atLaunch {
+            userDefaults.removeObject(forKey: Self.pendingLogoutCleanupKey)
+        }
+        sessionID = UUID()
+    }
+
+    /// 切换账号时轮换会话标识，拦截切号前发出的在途旧请求回写。
+    @discardableResult
+    func rotateSessionID() -> UUID {
+        let next = UUID()
+        sessionID = next
+        return next
+    }
+
+    /// 切号完成后原子替换当前快照并生成新的会话标识。
+    @discardableResult
+    func replaceSnapshot(_ account: AccountResponse, updatedAt: Date = Date()) -> UUID {
+        let next = UUID()
+        sessionID = next
+        if account.isLoggedIn {
+            userDefaults.removeObject(forKey: Self.pendingLogoutCleanupKey)
+        }
+        let snapshot = Snapshot(account: account, updatedAt: updatedAt)
+        cachedSnapshot = snapshot
+        persist(snapshot)
+        return next
     }
 
     func clear() {

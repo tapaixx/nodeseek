@@ -302,8 +302,8 @@ final class SearchViewController: UIViewController {
         return stack
     }()
 
-    private let listView: PostTextureListView = {
-        let view = PostTextureListView()
+    private let listView: PostListView = {
+        let view = PostListView()
         view.isHidden = true
         view.translatesAutoresizingMaskIntoConstraints = false
         return view
@@ -398,6 +398,7 @@ final class SearchViewController: UIViewController {
 
     /// 从首页推入或模态弹出时可返回；作为 Tab 根页面时没有上一页。
     private var canGoBack: Bool {
+        if parent is MainTabBarController { return false }
         if let navigationController, navigationController.viewControllers.first !== self {
             return true
         }
@@ -707,6 +708,26 @@ final class SearchViewController: UIViewController {
         updateContentVisibility()
     }
 
+    func submitDeepLinkSearch(query: String, scope: SearchScope) {
+        loadViewIfNeeded()
+        submitSearch(record: SearchHistoryRecord(query: query, category: .all, scope: scope))
+    }
+
+    /// 供深链路由去重：只有当前展示的正是相同关键词和范围时才跳过重搜。
+    func isShowingDeepLinkSearch(query: String, scope: SearchScope) -> Bool {
+        guard isViewLoaded, selectedScope == scope else { return false }
+        let displayedQuery = keywordTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard displayedQuery == query else { return false }
+        switch scope {
+        case .post:
+            return activeRequest == SearchRequest(query: query, category: .all)
+        case .user:
+            return activeUserQuery == query
+        case .google:
+            return false
+        }
+    }
+
     private func submitSearch(record: SearchHistoryRecord) {
         keywordTextField.text = record.query
         if record.scope == .post {
@@ -937,8 +958,8 @@ extension SearchViewController: UITextFieldDelegate {
     }
 }
 
-extension SearchViewController: PostTextureListViewDelegate {
-    func postTextureListView(_ textureListView: PostTextureListView, didSelectPostAt index: Int) {
+extension SearchViewController: PostListViewDelegate {
+    func postListView(_ listView: PostListView, didSelectPostAt index: Int) {
         guard items.indices.contains(index) else { return }
         let item = items[index]
         visitedStore.markVisited(post: item.post, visitedAt: Date())
@@ -956,15 +977,15 @@ extension SearchViewController: PostTextureListViewDelegate {
         navigationController?.pushViewController(detailViewController, animated: true)
     }
 
-    func postTextureListViewDidRequestRefresh(_ textureListView: PostTextureListView) {
+    func postListViewDidRequestRefresh(_ listView: PostListView) {
         reloadFirstPageForActiveRequest(isRefresh: true)
     }
 
-    func postTextureListViewDidRequestFirstPageRetry(_ textureListView: PostTextureListView) {
+    func postListViewDidRequestFirstPageRetry(_ listView: PostListView) {
         reloadFirstPageForActiveRequest(isRefresh: false)
     }
 
-    func postTextureListView(_ textureListView: PostTextureListView, didApproachBottomAt index: Int, totalCount: Int) {
+    func postListView(_ listView: PostListView, didApproachBottomAt index: Int, totalCount: Int) {
         loadMoreIfNeeded(currentIndex: index, totalCount: totalCount)
     }
 }
@@ -979,3 +1000,5 @@ private enum SearchLoadError: LocalizedError {
         }
     }
 }
+
+extension SearchViewController: HidesOuterNavigationBar {}

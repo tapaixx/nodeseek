@@ -1,0 +1,304 @@
+{
+  "read-history": {
+    "title": "冷启动、阅读正文、返回首页并从最近浏览重开同一帖",
+    "profiles": [
+      "guest",
+      "member"
+    ],
+    "setup": "游客或已登录，打开帖子会更新本机浏览记录"
+  },
+  "search-navigation": {
+    "title": "切换搜索范围、输入中文并返回首页",
+    "profiles": [
+      "guest",
+      "member"
+    ],
+    "setup": "游客或已登录，仅输入关键词"
+  },
+  "guest-login": {
+    "title": "游客进入通知、打开登录页、取消后回到游客状态",
+    "profiles": [
+      "guest"
+    ],
+    "setup": "游客，只读"
+  },
+  "member-search": {
+    "title": "已登录测试账号按已知关键词搜索并打开匹配帖子",
+    "profiles": [
+      "member"
+    ],
+    "setup": "已登录，搜索并阅读结果帖"
+  },
+  "category-comments": {
+    "title": "切换技术分类、打开有回复的帖子并阅读评论",
+    "profiles": [
+      "guest",
+      "member"
+    ],
+    "setup": "游客或已登录，打开帖子会更新本机浏览记录"
+  },
+  "member-compose": {
+    "title": "已登录账号打开发帖编辑器并退出",
+    "profiles": [
+      "member"
+    ],
+    "setup": "已登录阅读布局，打开编辑器并空白退出"
+  },
+  "draft-save": {
+    "title": "手动保存草稿，冷启动后恢复完整内容，放弃后重开为空",
+    "profiles": [
+      "draft"
+    ],
+    "setup": "已登录，读写本机测试草稿"
+  },
+  "draft-autosave": {
+    "title": "编辑器提示已存本机后直接冷启动，恢复自动保存的草稿",
+    "profiles": [
+      "draft"
+    ],
+    "setup": "已登录，读写本机测试草稿"
+  },
+  "draft-autosave-idle": {
+    "title": "编辑器提示已存本机后停留两秒再冷启动，恢复自动保存的草稿",
+    "profiles": [
+      "draft"
+    ],
+    "setup": "已登录，读写本机测试草稿"
+  },
+  "member-login": {
+    "title": "从游客登录 NodeSeek，核对账号并在冷启动后再次确认",
+    "profiles": [
+      "login"
+    ],
+    "setup": "游客阅读布局，运行后保留登录"
+  },
+  "login-me": {
+    "title": "游客登录后首次打开我的，首帧应有账号名",
+    "profiles": [
+      "login"
+    ],
+    "setup": "游客多 Tab 设备，运行后保留登录"
+  },
+  "real-comment": {
+    "title": "指定帖真实回帖、修改同一楼，并从服务端重读原文",
+    "profiles": [
+      "comment"
+    ],
+    "setup": "已登录，在指定帖公开回帖并编辑"
+  },
+  "member-comment-jump": {
+    "title": "我的评论点击回复定位第 18 楼，点击帖子标题打开首页，再返回原列表",
+    "profiles": [
+      "member"
+    ],
+    "setup": "已登录阅读布局，测试账号已有指定评论；只读，会更新本机浏览记录"
+  },
+  "push-warm": {
+    "title": "后台时点一次系统回复通知，直达目标楼层，返回一次到首页",
+    "profiles": [
+      "push"
+    ],
+    "setup": "已登录阅读布局；在专用模拟器上允许通知并投递一条带唯一标题的模拟推送"
+  },
+  "push-cold": {
+    "title": "进程已退出时点一次系统回复通知，直达目标楼层，返回一次到首页",
+    "profiles": [
+      "push"
+    ],
+    "setup": "已登录阅读布局；在专用模拟器上允许通知并投递一条带唯一标题的模拟推送"
+  },
+  "home-paging": {
+    "title": "首页下拉刷新、切换排序、加载第二页，读帖后返回原列表",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "已登录阅读布局；恢复测试前排序"
+  },
+  "quote-cancel": {
+    "title": "引用固定评论，取消引用后保留自己输入的正文",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "已登录阅读布局；只在本机输入，退出时丢弃"
+  },
+  "photo-return": {
+    "title": "长按大图显示分享和保存，收起菜单后可返回原帖原图",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "已登录阅读布局；只读，固定含图帖子"
+  },
+  "last-page-filter": {
+    "title": "只看楼主、恢复全部，再从页码面板直达末页",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "已登录阅读布局；只读，固定多页多作者帖子"
+  },
+  "inbox-reply": {
+    "title": "点回复通知定位对应楼层，返回后重读同一条的已读状态",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "已登录阅读布局；会读一条回复通知，缺少记录时报告跳过"
+  },
+  "favorite-sync": {
+    "title": "收藏指定帖，从我的收藏重开，取消后重新核对",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "已登录阅读布局；短暂修改测试账号的私人收藏，恢复原状态"
+  },
+  "logout-session": {
+    "title": "退出登录后检查我的、已打开的收藏、阅读侧栏与冷启动会话",
+    "profiles": [
+      "logout"
+    ],
+    "setup": "暂停运行，需 E2E_ALLOW_LOGOUT=1；专用 Profile 设备；必要时登录本机测试账号，需已有收藏，结束时保留游客状态"
+  },
+  "textkit-pagination": {
+    "title": "新版连续续页、末页回弹及页码面板往返",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开帖 1069173；临时启用 TextKit，只读"
+  },
+  "textkit-backscroll": {
+    "title": "新版从第三页原始 21 楼回滑至第二页十几楼再前进",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开帖 1067259；核对固定楼层 ID 和请求数，只读"
+  },
+  "textkit-paging-timing": {
+    "title": "拉过页底时超时、新手势重试、慢响应追加及末页回弹",
+    "profiles": [
+      "gesture"
+    ],
+    "setup": "AXe、iOS 模拟器；受控 HTML 传输，无需账号或网络"
+  },
+  "textkit-drag-on-button": {
+    "title": "新版在楼层底栏按钮上按住再拖动，列表滚动且不触发按钮",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开帖 1067259；临时启用 TextKit，只读"
+  },
+  "textkit-floor-menu": {
+    "title": "新版长按楼层弹出菜单，复制写入剪贴板，只看 TA 后从筛选条恢复",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开帖 1067259；临时启用 TextKit，会写本机剪贴板，只读"
+  },
+  "textkit-gallery": {
+    "title": "新版测评帖点图打开跨标签图集，左右翻页，关闭后回到原图位置",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开测评帖 1067722；临时启用 TextKit，只读"
+  },
+  "textkit-floor-gallery": {
+    "title": "新版点主楼配图打开同楼图集，从点中的那张开始，左右翻页后回到原图位置",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开帖 1072089；临时启用 TextKit，只读"
+  },
+  "textkit-guest-reaction-login": {
+    "title": "新版游客点主楼点赞、收藏先进入登录页，不弹确认框",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "须用游客设备（SIMULATOR_ID 指定）；公开帖 1071908，临时启用 TextKit；已登录设备会取消确认框并报错，不提交"
+  },
+  "textkit-link-color": {
+    "title": "新版正文与表格里的链接为站点绿，不出现系统蓝",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开帖 1071908；临时启用 TextKit，只读，保存逐屏截图"
+  },
+  "textkit-dark-text": {
+    "title": "新版详情页在暗黑下打开或中途切换外观，文字颜色跟着变",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，公开帖 1071908；临时启用 TextKit，会切换模拟器外观并在结束时还原"
+  },
+  "textkit-guest-hidden-post": {
+    "title": "游客打开对游客隐藏的帖子，显示登录入口而不是帖子不存在",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，未登录设备（SIMULATOR_ID 指向游客设备），帖子 1062816；临时启用 TextKit，只读"
+  },
+  "textkit-signature-link": {
+    "title": "新版详情页点签名里的链接能打开",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，已登录设备（站点只给登录用户输出签名），帖子 703863；临时启用 TextKit，只读，会打开签名里的链接"
+  },
+  "vote-guest-hint": {
+    "title": "游客打开投票帖可看选项，显示请先登录后再投票且不能提交",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，未登录设备（SIMULATOR_ID 指向游客设备），公开投票帖 917518；只读"
+  },
+  "vote-member-open": {
+    "title": "已登录打开投票帖不显示登录提示，未投票时选项可点",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，已登录设备，公开投票帖 917518；只读，不提交投票"
+  },
+  "vote-login-return": {
+    "title": "游客在投票帖内登录，返回同一张卡片后可投票",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "须用空闲的未登录阅读模式模拟器（SIMULATOR_ID 指定），运行后保留登录，重跑前在 App 设置里退出登录（只清本机会话）。默认帖 917518，E2E_VOTE_POST 换帖，E2E_VOTE_SUBMIT=1 时公开投第一个选项"
+  },
+  "deeplink-post": {
+    "title": "系统打开帖子深链，首次请求 893437 的第一页",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，member 专用设备；只读"
+  },
+  "deeplink-page-header": {
+    "title": "直达帖子第二页显示标题、楼主及第 11 楼",
+    "profiles": ["daily"],
+    "setup": "阅读模式，公开帖 893437；只读"
+  },
+  "deeplink-floor": {
+    "title": "冷启动从网页链接、热启动从帖子深链定位第 18 楼",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，member 专用设备；只读"
+  },
+  "deeplink-safari-probe": {
+    "title": "第三方网页在 Safari 浏览控制器打开，探针深链仍进原生列表",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "阅读模式，member 专用设备；只读"
+  },
+  "deeplink-search-tabs": {
+    "title": "多 Tab 打开用户搜索，重复点同一个链接只跳一次",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "member 专用设备，临时用启动参数覆盖底栏组合"
+  },
+  "deeplink-user-compose": {
+    "title": "从用户主页打开发帖预填，编辑中再点链接保留原内容",
+    "profiles": [
+      "daily"
+    ],
+    "setup": "已登录的阅读模式设备，退出时保留原有草稿或清除本条测试草稿"
+  }
+}

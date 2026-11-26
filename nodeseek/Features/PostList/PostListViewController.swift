@@ -29,7 +29,7 @@ class PostListViewController: UIViewController {
     }
 
     private enum FloatingControlLayout {
-        static let sortToggleBottomInset: CGFloat = 204
+        static let sortToggleBottomInset: CGFloat = 80
         static let composeButtonTrailing: CGFloat = 20
         static let composeButtonBottom: CGFloat = 16
         /// 滚动超过这个距离才切换发帖按钮显隐，避免手指轻微抖动时闪烁。
@@ -42,14 +42,17 @@ class PostListViewController: UIViewController {
     let presenter: PostListPresenterProtocol
     let layout: AppNavigationLayout
     private let searchEntrySettings: PostListSearchEntrySettings
+    private let sortPreferenceStore: PostListSortPreferenceStoring
     let detailTestURLProvider: () -> String
     let autoCheckInRunner: @MainActor (UIViewController?, AutoCheckInTrigger) async -> Void
+    private var isHomeVisible = false
+    private var hasLoadedHomeContent = false
     private var hasAppeared = false
     var categories: [PostListCategoryItem] = []
     var selectedCategory: PostListCategoryItem = .all
     var currentSortMode: PostListSortMode = .replyTime
     var sortToggleWidthConstraint: NSLayoutConstraint?
-    private var sortToggleTrailingConstraint: NSLayoutConstraint?
+    var sortToggleHeightConstraint: NSLayoutConstraint?
     private var sortToggleCollapseWorkItem: DispatchWorkItem?
     private var searchEntryObserver: NSObjectProtocol?
     private var notificationReadStateObserver: NSObjectProtocol?
@@ -58,7 +61,13 @@ class PostListViewController: UIViewController {
     private var tabScrollTrailingToSafeAreaConstraint: NSLayoutConstraint?
     private var tabScrollTrailingToSearchButtonConstraint: NSLayoutConstraint?
     var isSortToggleExpanded = false
+    private var composeLoginCheckTask: Task<Void, Never>?
     private var isComposeButtonHidden = false
+    /// iPhone Duo 外屏等竖排栏场景下，发帖入口改放进系统侧栏。
+    private var usesVerticalBar: Bool {
+        guard #available(iOS 27.1, *) else { return false }
+        return traitCollection.verticalBarEdge != .unspecified
+    }
     /// 本次拖动中上一次切换发帖按钮时的手指位置。
     private var composeDragAnchorY: CGFloat?
     let sideMenuViewController: PostListSideMenuViewController
@@ -213,6 +222,7 @@ class PostListViewController: UIViewController {
         visitedStore: VisitedPostStoreProtocol = EmptyVisitedPostStore(),
         floatingPositionStore: FloatingControlPositionStoring = UserDefaultsFloatingControlPositionStore(),
         searchEntrySettings: PostListSearchEntrySettings = .shared,
+        sortPreferenceStore: PostListSortPreferenceStoring = PostListSortPreferenceStore.shared,
         autoCheckInRunner: @escaping @MainActor (UIViewController?, AutoCheckInTrigger) async -> Void = { presentationContext, trigger in
             await AutoCheckInModule.runIfNeeded(
                 presentationContext: presentationContext,
@@ -220,17 +230,22 @@ class PostListViewController: UIViewController {
             )
         },
         detailTestURLProvider: @escaping () -> String = {
-            UIPasteboard.general.url?.absoluteString ?? UIPasteboard.general.string ?? ""
+            #if DEBUG
+            if let url = ProcessInfo.processInfo.environment["NODESEEK_E2E_DETAIL_URL"] { return url }
+            #endif
+            return UIPasteboard.general.url?.absoluteString ?? UIPasteboard.general.string ?? ""
         }
     ) {
         self.presenter = presenter
         self.layout = layout
         self.searchEntrySettings = searchEntrySettings
+        self.sortPreferenceStore = sortPreferenceStore
         self.detailTestURLProvider = detailTestURLProvider
         self.autoCheckInRunner = autoCheckInRunner
         self.sideMenuViewController = PostListSideMenuViewController()
         self.pageContainerViewController = PostPageContainerViewController(
-            visitedStore: visitedStore
+            visitedStore: visitedStore,
+            sortPreferenceStore: sortPreferenceStore
         )
         self.floatingSortToggleContainer = FloatingControlContainerView(
             accessibilityIdentifier: "post-list-floating-sort-toggle",
@@ -268,9 +283,10 @@ class PostListViewController: UIViewController {
     
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(true, animated: animated)
+        navigationController?.setNavigationBarHidden(!showsComposeInNavigationBar, animated: animated)
         refreshAppearanceForCurrentTraits()
         applySearchEntryVisibility(animated: false)
+        applySortToggleVisibility()
         presenter.viewWillAppear()
         if hasAppeared {
             Task { @MainActor [weak self] in
@@ -281,8 +297,20 @@ class PostListViewController: UIViewController {
         hasAppeared = true
     }
     
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        isHomeVisible = true
+        showHomeSortHintIfNeeded()
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        isHomeVisible = false
+        composeLoginCheckTask?.cancel()
+        composeLoginCheckTask = nil
+        if isSortToggleExpanded || sortToggleCollapseWorkItem != nil {
+            setSortToggleExpanded(false, animated: false)
+        }
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
@@ -330,8 +358,7 @@ class PostListViewController: UIViewController {
         tabScrollView.addSubview(tabStackView)
 
         let sortToggleTrailingConstraint = sortToggleAnchorView.trailingAnchor.constraint(
-            equalTo: view.safeAreaLayoutGuide.trailingAnchor,
-            constant: PostListSortToggleButton.collapsedTrailing
+            equalTo: view.safeAreaLayoutGuide.trailingAnchor
         )
         let sortToggleWidthConstraint = sortToggleAnchorView.widthAnchor.constraint(
             equalToConstant: PostListSortToggleButton.collapsedWidth
@@ -343,7 +370,8 @@ class PostListViewController: UIViewController {
         let tabScrollTrailingToSearchButtonConstraint = tabScrollView.trailingAnchor.constraint(
             equalTo: topSearchButton.leadingAnchor
         )
-        self.sortToggleTrailingConstraint = sortToggleTrailingConstraint
+        let sortToggleHeightConstraint = sortToggleAnchorView.heightAnchor.constraint(equalToConstant: 44)
+        self.sortToggleHeightConstraint = sortToggleHeightConstraint
         self.sortToggleWidthConstraint = sortToggleWidthConstraint
         self.tabScrollTrailingToSafeAreaConstraint = tabScrollTrailingToSafeAreaConstraint
         self.tabScrollTrailingToSearchButtonConstraint = tabScrollTrailingToSearchButtonConstraint
@@ -374,7 +402,7 @@ class PostListViewController: UIViewController {
                 constant: -FloatingControlLayout.sortToggleBottomInset
             ),
             sortToggleWidthConstraint,
-            sortToggleAnchorView.heightAnchor.constraint(equalToConstant: PostListSortToggleButton.height),
+            sortToggleHeightConstraint,
 
             tabScrollTrailingToSafeAreaConstraint,
             tabScrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: TopBarLayout.topOffset),
@@ -407,13 +435,19 @@ class PostListViewController: UIViewController {
         case .tabs:
             tabScrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12).isActive = true
             installComposeButton()
+            if #available(iOS 27.1, *) {
+                registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (self: Self, _) in
+                    self.applyComposeEntryPlacement()
+                }
+            }
+            applyComposeEntryPlacement()
         }
         observeSearchEntrySettings()
         observeNotificationReadState()
         observeNotificationUnreadCount()
         observeAppForeground()
         sortToggleButton.apply(sortMode: currentSortMode, expanded: false)
-        sortToggleButton.applyAlpha(expanded: false)
+        applySortToggleVisibility()
         applySearchEntryVisibility(animated: false)
     }
     
@@ -424,9 +458,11 @@ class PostListViewController: UIViewController {
 
     @objc private func composeButtonTapped() {
         AppLog.info(.postList, "首页悬浮发帖按钮点击")
-        Task { @MainActor [weak self] in
+        guard composeLoginCheckTask == nil else { return }
+        composeLoginCheckTask = Task { @MainActor [weak self] in
             let isLoggedIn = await TabLayoutAccountGate.isLoggedIn()
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
+            composeLoginCheckTask = nil
             if isLoggedIn {
                 presenter.didTapNewDiscussion()
             } else {
@@ -441,10 +477,24 @@ class PostListViewController: UIViewController {
         sideMenuViewController.show(animated: true)
     }
 
-    @objc private func sortToggleButtonTapped() {
+    func selectedCategoryDidLoadFirstPage() {
+        hasLoadedHomeContent = true
+        showHomeSortHintIfNeeded()
+    }
+
+    private func showHomeSortHintIfNeeded() {
+        guard isHomeVisible, hasLoadedHomeContent, sortPreferenceStore.showsHomeControl,
+              !sortPreferenceStore.hasSeenHomeSortHint else { return }
+        sortPreferenceStore.hasSeenHomeSortHint = true
         setSortToggleExpanded(true, animated: true)
-        let sortMode = pageContainerViewController.toggleSortMode(for: selectedCategory)
-        renderSortMode(sortMode)
+        scheduleSortToggleCollapse()
+    }
+
+    @objc private func sortToggleButtonTapped() {
+        sortPreferenceStore.hasSeenHomeSortHint = true
+        isSortToggleExpanded = true
+        currentSortMode = pageContainerViewController.toggleSortMode(for: selectedCategory)
+        setSortToggleExpanded(true, animated: true)
         pageContainerViewController.scrollToTop(for: selectedCategory, animated: false)
         scheduleSortToggleCollapse()
     }
@@ -515,35 +565,54 @@ class PostListViewController: UIViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.35, execute: workItem)
     }
 
+    private func applySortToggleVisibility() {
+        let showsControl = sortPreferenceStore.showsHomeControl
+        floatingSortToggleContainer.isHidden = !showsControl
+        if !showsControl {
+            setSortToggleExpanded(false, animated: false)
+        }
+    }
+
     private func setSortToggleExpanded(_ expanded: Bool, animated: Bool) {
         sortToggleCollapseWorkItem?.cancel()
         sortToggleCollapseWorkItem = nil
         isSortToggleExpanded = expanded
-        sortToggleButton.apply(sortMode: currentSortMode, expanded: expanded)
-        sortToggleWidthConstraint?.constant = expanded
-            ? PostListSortToggleButton.expandedWidth(for: currentSortMode.accessibilityTitle)
-            : PostListSortToggleButton.collapsedWidth
-        sortToggleTrailingConstraint?.constant = expanded
-            ? PostListSortToggleButton.expandedTrailing
-            : PostListSortToggleButton.collapsedTrailing
 
-        let animations: () -> Void = { [weak self] in
-            self?.sortToggleButton.applyAlpha(expanded: expanded)
-            self?.view.layoutIfNeeded()
-        }
-        guard animated else {
-            animations()
+        guard animated, !UIAccessibility.isReduceMotionEnabled else {
+            renderSortMode(currentSortMode)
+            view.layoutIfNeeded()
             return
         }
-        sortToggleButton.applyJellyAnimation(expanded: expanded)
-        UIView.animate(
-            withDuration: PostListSortToggleButton.transitionDuration,
-            delay: 0,
-            usingSpringWithDamping: PostListSortToggleButton.transitionDamping,
-            initialSpringVelocity: PostListSortToggleButton.transitionVelocity,
-            options: [.allowUserInteraction, .beginFromCurrentState],
-            animations: animations
-        )
+
+        // 先在动画外完成其他待定布局，避免列表刚加载的 cell 被一起动画导致错位。
+        view.layoutIfNeeded()
+        if expanded {
+            renderSortMode(currentSortMode)
+            UIView.animate(
+                withDuration: 0.18,
+                delay: 0,
+                options: [.allowUserInteraction, .beginFromCurrentState],
+                animations: { [weak self] in
+                    self?.view.layoutIfNeeded()
+                }
+            )
+        } else {
+            sortToggleWidthConstraint?.constant = PostListSortToggleButton.collapsedWidth
+            sortToggleHeightConstraint?.constant = PostListSortToggleButton.collapsedWidth
+            UIView.animate(
+                withDuration: 0.18,
+                delay: 0,
+                options: [.allowUserInteraction, .beginFromCurrentState],
+                animations: { [weak self] in
+                    self?.sortToggleButton.applyCollapsedVisuals()
+                    self?.view.layoutIfNeeded()
+                },
+                completion: { [weak self] _ in
+                    guard let self, !self.isSortToggleExpanded else { return }
+                    self.sortToggleButton.apply(sortMode: self.currentSortMode, expanded: false)
+                }
+            )
+        }
     }
 
     private func refreshAppearanceForCurrentTraits() {
@@ -654,6 +723,33 @@ class PostListViewController: UIViewController {
         }
     }
 
+    private var showsComposeInNavigationBar: Bool {
+        layout == .tabs && usesVerticalBar
+    }
+
+    /// 竖排栏时首页导航栏只承载发帖按钮，系统会把它排进侧栏，不占顶部空间；悬浮按钮随之隐藏。
+    private func applyComposeEntryPlacement() {
+        let inBar = showsComposeInNavigationBar
+        composeButton.isHidden = inBar
+        if inBar {
+            if navigationItem.rightBarButtonItem == nil {
+                // 图标和标题都给：竖排用图标，溢出菜单用标题。
+                let item = UIBarButtonItem(
+                    title: "发帖",
+                    image: UIImage(systemName: "square.and.pencil"),
+                    primaryAction: UIAction { [weak self] _ in self?.composeButtonTapped() }
+                )
+                item.accessibilityIdentifier = "post-list-compose-bar-item"
+                navigationItem.rightBarButtonItem = item
+            }
+        } else {
+            navigationItem.rightBarButtonItem = nil
+        }
+        if isHomeVisible || viewIfLoaded?.window != nil {
+            navigationController?.setNavigationBarHidden(!inBar, animated: false)
+        }
+    }
+
     /// 向下滚动收起发帖按钮，向上滚动或回到顶部时再出现。
     /// 方向只看手指拖动的累计距离：行高校正、回弹会改动 contentOffset，按逐帧位移判断会让按钮来回闪。
     private func handleListScroll(_ scrollView: UIScrollView) {
@@ -726,6 +822,9 @@ class PostListViewController: UIViewController {
         }
         sideMenuViewController.onRecentVisitedTapped = { [weak self] in
             self?.presenter.didTapRecentVisited()
+        }
+        sideMenuViewController.onHotListTapped = { [weak self] in
+            self?.presenter.didTapHotList()
         }
         sideMenuViewController.onProbeTapped = { [weak self] in
             self?.presenter.didTapProbe()
@@ -808,3 +907,5 @@ private final class PostListTopSearchGradientView: UIView {
         updateColors()
     }
 }
+
+extension PostListViewController: HidesOuterNavigationBar {}

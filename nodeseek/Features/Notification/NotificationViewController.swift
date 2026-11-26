@@ -124,8 +124,9 @@ final class NotificationViewController: UIViewController {
             segmentedContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             segmentedContainer.heightAnchor.constraint(equalToConstant: 52),
 
-            segmentedControl.leadingAnchor.constraint(equalTo: segmentedContainer.leadingAnchor, constant: 16),
-            segmentedControl.trailingAnchor.constraint(equalTo: segmentedContainer.trailingAnchor, constant: -16),
+            // 分段控件贴安全区：iPhone Duo 外屏状态栏和导航栏竖排在侧边。
+            segmentedControl.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            segmentedControl.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             segmentedControl.centerYAnchor.constraint(equalTo: segmentedContainer.centerYAnchor),
 
             tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -133,15 +134,15 @@ final class NotificationViewController: UIViewController {
             tableView.topAnchor.constraint(equalTo: segmentedContainer.bottomAnchor),
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            errorView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            errorView.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
             errorView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            errorView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 32),
-            errorView.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -32),
+            errorView.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 32),
+            errorView.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -32),
 
-            loginPromptView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            loginPromptView.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
             loginPromptView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            loginPromptView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 32),
-            loginPromptView.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -32)
+            loginPromptView.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 32),
+            loginPromptView.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -32)
         ])
 
         applyDisplayState()
@@ -316,16 +317,11 @@ final class NotificationViewController: UIViewController {
     }
 
     private func showLogin() {
-        let loginViewController = LoginWebViewController { [weak self] in
+        LoginWebViewController.open(from: self) { [weak self] in
             // 本页在导航栈里时返回会经 viewWillAppear 刷新；弹出的情况在这里补一次
             guard let self, self.navigationController == nil else { return }
             self.loadUnreadCount()
             self.loadSelectedTab(showLoading: true)
-        }
-        if let navigationController {
-            navigationController.pushViewController(loginViewController, animated: true)
-        } else {
-            present(MessageNavigationController(rootViewController: loginViewController), animated: true)
         }
     }
 

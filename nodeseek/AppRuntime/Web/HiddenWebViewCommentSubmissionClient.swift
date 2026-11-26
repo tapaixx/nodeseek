@@ -33,6 +33,11 @@ enum HiddenWebViewPostActionPageScheduler {
     private static let requestLock = HiddenWebViewRequestLock()
     private static let channel = HiddenWebViewChannel.isolated(UUID())
 
+    @MainActor
+    static func invalidatePreparedPage() {
+        HiddenWebViewLoader.releaseLoader(for: channel)
+    }
+
     static func prepare(pageURL: URL, timeoutInterval: TimeInterval, reason: String) {
         Task {
             do {
@@ -80,6 +85,12 @@ enum HiddenWebViewPageActionScheduler {
     private static let channel = HiddenWebViewChannel.isolated(UUID())
     private static let messageSendLock = HiddenWebViewRequestLock()
     private static let messageSendChannel = HiddenWebViewChannel.isolated(UUID())
+
+    @MainActor
+    static func invalidatePreparedPage() {
+        HiddenWebViewLoader.releaseLoader(for: channel)
+        HiddenWebViewLoader.releaseLoader(for: messageSendChannel)
+    }
 
     fileprivate static func lockAndChannel(for purpose: Purpose) -> (HiddenWebViewRequestLock, HiddenWebViewChannel) {
         switch purpose {

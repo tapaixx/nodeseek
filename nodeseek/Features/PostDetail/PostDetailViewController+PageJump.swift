@@ -3,29 +3,48 @@
 //  nodeseek
 //
 
-import AsyncDisplayKit
 import UIKit
 
 extension PostDetailViewController {
     private enum PageIndicatorLayout {
         static let trailingInset: CGFloat = 16
-        static let bottomInset: CGFloat = 16
+        static let bottomInset: CGFloat = 12
+        static let collapsedSpacing: CGFloat = 10
         static let hideDelay: TimeInterval = 1.5
     }
 
     func configurePageIndicator() {
         pageIndicatorButton.addTarget(self, action: #selector(pageIndicatorTapped), for: .touchUpInside)
         view.addSubview(pageIndicatorButton)
-        NSLayoutConstraint.activate([
+        pageIndicatorExpandedConstraints = [
             pageIndicatorButton.trailingAnchor.constraint(
                 equalTo: view.safeAreaLayoutGuide.trailingAnchor,
                 constant: -PageIndicatorLayout.trailingInset
             ),
             pageIndicatorButton.bottomAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+                equalTo: replyBarView.topAnchor,
                 constant: -PageIndicatorLayout.bottomInset
             )
-        ])
+        ]
+        // 评论栏收成小圆钮时，页码贴到圆钮左侧，底部不再空出一块。
+        pageIndicatorCollapsedConstraints = [
+            pageIndicatorButton.trailingAnchor.constraint(
+                equalTo: replyBarView.capsuleView.leadingAnchor,
+                constant: -PageIndicatorLayout.collapsedSpacing
+            ),
+            pageIndicatorButton.centerYAnchor.constraint(equalTo: replyBarView.capsuleView.centerYAnchor)
+        ]
+        NSLayoutConstraint.activate(pageIndicatorExpandedConstraints)
+    }
+
+    func updatePageIndicatorPlacement(replyBarCollapsed: Bool) {
+        if replyBarCollapsed {
+            NSLayoutConstraint.deactivate(pageIndicatorExpandedConstraints)
+            NSLayoutConstraint.activate(pageIndicatorCollapsedConstraints)
+        } else {
+            NSLayoutConstraint.deactivate(pageIndicatorCollapsedConstraints)
+            NSLayoutConstraint.activate(pageIndicatorExpandedConstraints)
+        }
     }
 
     /// 总页数取分页条里最大的页码；站点分页条会省略中间页，但总会给出最后一页。
@@ -35,12 +54,15 @@ extension PostDetailViewController {
         return max(maxItemPage, pagination.nextPage ?? 1, currentPage)
     }
 
-    /// 屏幕上第一条可见评论所在的页；只看到主楼时取已加载的第一页。
+    /// 平时按首条可见评论定位，滚到底部时按末条可见评论定位。
     var visibleCommentPage: Int {
         let firstLoadedPage = loadedCommentPageRanges.keys.min() ?? currentPage
         guard isViewLoaded else { return firstLoadedPage }
-        let rows = detailRows
-        let visibleRows = tableNode.indexPathsForVisibleRows().map(\.row).sorted()
+        let rows = collectionList.rows
+        let list = collectionList.view
+        let endY = list.contentSize.height - list.bounds.height + list.adjustedContentInset.bottom
+        let atEnd = pagination?.nextPage == nil && endY > -list.adjustedContentInset.top && list.contentOffset.y >= endY - 1
+        let visibleRows = list.indexPathsForVisibleItems.map(\.row).sorted(by: atEnd ? (>) : (<))
         for row in visibleRows where row < rows.count {
             guard case .comment(let commentIndex) = rows[row] else { continue }
             if let page = loadedCommentPageRanges.first(where: { $0.value.contains(commentIndex) })?.key {

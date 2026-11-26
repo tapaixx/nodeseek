@@ -6,13 +6,14 @@
 //
 
 import UIKit
-import AsyncDisplayKit
 
 enum PostDetailLinkDestination {
     case vote(Int)
     case currentPageAnchor(String)
     case nativePost(postID: String, page: Int, url: URL)
     case userProfile(URL)
+    /// 正文里的 @用户名，链接只带名字，需要换成 uid 才能进原生个人页。
+    case memberName(String, URL)
     case web(URL)
     case safari(URL)
     case externalApp(URL)
@@ -121,6 +122,11 @@ enum PostDetailLinkResolver {
         }
 
         let path = resolvedURL.path
+        if path == "/member", let name = URLComponents(url: resolvedURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "t" })?.value?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return .memberName(name, resolvedURL)
+        }
         if isUserProfilePath(path) {
             return .userProfile(resolvedURL)
         }
@@ -188,7 +194,11 @@ class PostDetailViewController: UIViewController {
 
     enum Layout {
         static let horizontalInset: CGFloat = PostDetailContentLayout.horizontalInset
-        static let replyButtonBottomInset: CGFloat = 112
+        static let replyBarHorizontalInset: CGFloat = 16
+        static let replyBarBottomInset: CGFloat = 8
+        static let replyBarMinimumHeight: CGFloat = 44
+        /// 列表底部在评论栏之上再多留的距离，避免最后一层贴着评论栏。
+        static let replyBarContentSpacing: CGFloat = 12
     }
 
     let presenter: PostDetailPresenterProtocol
@@ -199,31 +209,24 @@ class PostDetailViewController: UIViewController {
     var currentHeaderContent: PostDetailHeaderContent?
     var authorRiskWarningPostID: String?
     var pagination: PostDetailPagination?
-    var headerRenderedContent: [RenderedContentBlock]?
     var comments: [Comment] = []
     var loadedCommentPageRanges: [Int: Range<Int>] = [:]
-    var commentRenderedCache: [String: [RenderedContentBlock]] = [:]
-    var renderedCommentIDs: Set<String> = []
-    var commentRenderInFlight: Set<String> = []
     var detailImageSizeCache: [URL: CGSize] = [:]
-    var renderGeneration: Int = 0
     let sourcePostURL: URL?
     var photoBrowserPresenter: DetailPhotoBrowserPresenter?
-    var attachmentLayoutRefreshWorkItem: DispatchWorkItem?
-    var tableReloadWorkItem: DispatchWorkItem?
-    var initialContentRevealWorkItem: DispatchWorkItem?
-    var pendingInitialContentRevealGeneration: Int?
     var pendingInitialAnchorID: String?
-    var pendingReloadIndexPaths: Set<IndexPath> = []
     var displayMode: DisplayMode = .skeleton
     var hasRenderedDetailContent = false
     var showsReplyEntry = false
+    /// 判断滚动方向的基准位置：跟随当前方向上的最远点，反向累计够距离才切换评论栏形态。
+    var replyBarScrollAnchorY: CGFloat = 0
+    var pageIndicatorExpandedConstraints: [NSLayoutConstraint] = []
+    var pageIndicatorCollapsedConstraints: [NSLayoutConstraint] = []
     let stickerCookieSession = NodeSeekCookieSession()
     var replyComposerMode: CommentComposerMode = .plain
     var replyContextBarHeightConstraint: NSLayoutConstraint?
     var replyStickerPickerHeightConstraint: NSLayoutConstraint?
     let leadingScreensForBatching: CGFloat = 2.0
-    var lastBatchFetchRequestedCommentCount: Int?
     var authorFilter: PostDetailAuthorFilter?
     var authorFilterAutoLoadStreak = 0
     var authorFilterAutoLoadWorkItem: DispatchWorkItem?
@@ -247,7 +250,6 @@ class PostDetailViewController: UIViewController {
         viewController.present(alert, animated: true)
     }
     #if DEBUG
-    var pendingScrollToRow: Int?
     var testVisibleAnchorIDs: Set<String>?
     var testPresentedLoadedCommentID: String?
     var testHighlightedAnchorID: String?
@@ -260,18 +262,30 @@ class PostDetailViewController: UIViewController {
     var testOpenedFullPostAnchorWasNil = false
     #endif
     let skeletonCommentRowCount = 4
+    var loginCheckTask: Task<Void, Never>?
     let accountRefresher: any CurrentAccountRefreshing
     let nodeImageAPIKeyStore: NodeImageAPIKeyStoring
     let nodeImageUploadClient: NodeImageUploading
     let pasteboardStringWriter: PasteboardStringWriter
+    /// 按名字查 uid，供 @用户 跳原生个人页。
+    var memberFinder: any UserSearchLoading = NodeSeekUserContentClient()
+    var memberLookupTask: Task<Void, Never>?
     var imageUploadTask: Task<Void, Never>?
-    let renderQueue = DispatchQueue(
-        label: "com.nodeseek.app.postdetail.render",
-        qos: .userInitiated
-    )
     let initialContentRevealTimeout: TimeInterval = 0.6
 
-    let tableNode = ASTableNode(style: .plain)
+    private(set) lazy var collectionList = PostDetailCollectionList(page: self)
+    var detailScrollView: UIScrollView { collectionList.view }
+    /// 竖排栏时代替底部评论栏的入口，由系统排进侧栏。
+    private(set) lazy var verticalReplyBarItem: UIBarButtonItem = {
+        // 图标和标题都给：竖排用图标，溢出菜单用标题。
+        let item = UIBarButtonItem(
+            title: "写评论",
+            image: UIImage(systemName: "text.bubble"),
+            primaryAction: UIAction { [weak self] _ in self?.replyButtonTapped() }
+        )
+        item.accessibilityIdentifier = "post-detail-vertical-reply-item"
+        return item
+    }()
     var toastHideWorkItem: DispatchWorkItem?
     lazy var toastIconWidthConstraint = toastIconView.widthAnchor.constraint(equalToConstant: 18)
     lazy var toastLabelLeadingConstraint = toastLabel.leadingAnchor.constraint(equalTo: toastIconView.trailingAnchor, constant: 8)
@@ -304,10 +318,39 @@ class PostDetailViewController: UIViewController {
     let loadMoreCommentsRefreshButton: UIButton = {
         let button = UIButton(type: .system)
         var configuration = UIButton.Configuration.plain()
-        configuration.title = "点击加载新评论"
-        configuration.baseForegroundColor = .secondaryLabel
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 8, bottom: 12, trailing: 8)
         button.configuration = configuration
+        // 「已经到底了」是状态，用更浅的颜色；「刷新」才是操作，颜色和字重稍强。
+        button.configurationUpdateHandler = { button in
+            let font = UIFont.preferredFont(forTextStyle: .footnote)
+            let actionFont = UIFontMetrics(forTextStyle: .footnote)
+                .scaledFont(for: .systemFont(ofSize: 13, weight: .medium))
+            let title = NSMutableAttributedString(
+                string: DetailListStrings.text("comments-end") + " · ",
+                attributes: [.font: font, .foregroundColor: UIColor.tertiaryLabel]
+            )
+            let action: [NSAttributedString.Key: Any] = [.font: actionFont, .foregroundColor: UIColor.secondaryLabel]
+            if let icon = UIImage(
+                systemName: "arrow.clockwise",
+                withConfiguration: UIImage.SymbolConfiguration(font: actionFont, scale: .small)
+            ) {
+                let attachment = NSTextAttachment(image: icon)
+                title.append(NSAttributedString(attachment: attachment))
+                title.addAttributes(action, range: NSRange(location: title.length - 1, length: 1))
+                title.append(NSAttributedString(string: " ", attributes: action))
+            }
+            title.append(NSAttributedString(string: DetailListStrings.text("comments-refresh"), attributes: action))
+            var updated = button.configuration
+            updated?.attributedTitle = AttributedString(title)
+            updated?.titleLineBreakMode = .byTruncatingTail
+            button.configuration = updated
+        }
+        if #available(iOS 17.0, *) {
+            button.registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (button: UIButton, _) in
+                button.setNeedsUpdateConfiguration()
+            }
+        }
+        button.accessibilityLabel = DetailListStrings.text("comments-end") + ", " + DetailListStrings.text("comments-refresh")
         button.isHidden = true
         button.translatesAutoresizingMaskIntoConstraints = false
         button.accessibilityIdentifier = "post-detail-refresh-comments-at-end-button"
@@ -316,22 +359,15 @@ class PostDetailViewController: UIViewController {
 
     lazy var loadMoreCommentsContainer: UIView = {
         let container = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 56))
-        let separator = UIView()
-        separator.backgroundColor = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(separator)
         container.addSubview(loadMoreCommentsIndicator)
         container.addSubview(loadMoreCommentsRefreshButton)
-        let separatorHeight = 1.0 / UIScreen.main.scale
+        let button = loadMoreCommentsRefreshButton
         NSLayoutConstraint.activate([
-            separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            separator.topAnchor.constraint(equalTo: container.topAnchor),
-            separator.heightAnchor.constraint(equalToConstant: separatorHeight),
             loadMoreCommentsIndicator.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             loadMoreCommentsIndicator.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            loadMoreCommentsRefreshButton.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            loadMoreCommentsRefreshButton.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+            button.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            button.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            button.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 16)
         ])
         return container
     }()
@@ -353,38 +389,13 @@ class PostDetailViewController: UIViewController {
         return button
     }()
 
-    let replyButton: UIButton = {
-        let button = UIButton(type: .system)
-        var configuration = UIButton.Configuration.plain()
-        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)
-        configuration.image = UIImage(systemName: "text.bubble.fill", withConfiguration: symbolConfiguration)
-        configuration.baseForegroundColor = .systemBackground
-        configuration.background.backgroundColor = .clear
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 12)
-        button.configuration = configuration
-        button.backgroundColor = .label
-        button.accessibilityIdentifier = "post-detail-reply-button"
-        button.accessibilityLabel = "评论"
-        button.isHidden = true
-        button.alpha = 0.48
-        button.layer.cornerRadius = 22
-        button.layer.cornerCurve = .continuous
-        button.layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner]
-        button.layer.borderWidth = 0.5
-        button.layer.borderColor = UIColor.separator.cgColor
-        button.clipsToBounds = true
-        button.translatesAutoresizingMaskIntoConstraints = false
-        return button
-    }()
+    /// 置底评论栏：点按展开回复编辑器，有草稿时显示草稿首行；往下读时收成小圆钮。
+    let replyBarView = PostDetailReplyBarView()
 
-    private let replyButtonAnchorView: UIView = {
-        let view = UIView()
-        view.isHidden = true
-        view.translatesAutoresizingMaskIntoConstraints = false
-        return view
-    }()
+    /// 低版本没有滚动边缘效果，用渐隐遮罩让正文在评论栏下方淡出。
+    let replyBarFadeView = PostDetailReplyBarFadeView()
 
-    let floatingReplyButtonContainer: FloatingControlContainerView
+    var replyButton: UIButton { replyBarView.button }
 
     let replyEditorBackdrop: UIControl = {
         let control = UIControl()
@@ -524,21 +535,29 @@ class PostDetailViewController: UIViewController {
     /// 滚动时浮出的页码胶囊，点一下打开页码面板。
     let pageIndicatorButton: UIButton = {
         let button = UIButton(type: .system)
-        var configuration = UIButton.Configuration.filled()
-        configuration.baseBackgroundColor = .label
-        configuration.baseForegroundColor = .systemBackground
-        configuration.cornerStyle = .capsule
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14)
+        // 与评论栏同款玻璃胶囊，避免实心黑块压在评论栏和楼层操作上显得突兀。
+        var configuration = PostDetailReplyBarStyle.glassConfiguration()
+        configuration.baseForegroundColor = .label
+        configuration.image = UIImage(
+            systemName: "chevron.up.chevron.down",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
+        )
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 4
+        configuration.imageColorTransformer = UIConfigurationColorTransformer { _ in .secondaryLabel }
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 10)
         configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
             outgoing.font = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
             return outgoing
         }
         button.configuration = configuration
-        button.layer.shadowColor = UIColor.black.cgColor
-        button.layer.shadowOpacity = 0.16
-        button.layer.shadowRadius = 10
-        button.layer.shadowOffset = CGSize(width: 0, height: 4)
+        if #unavailable(iOS 26.0) {
+            button.layer.shadowColor = UIColor.black.cgColor
+            button.layer.shadowOpacity = 0.08
+            button.layer.shadowRadius = 8
+            button.layer.shadowOffset = CGSize(width: 0, height: 3)
+        }
         button.accessibilityIdentifier = "post-detail-page-indicator"
         button.isHidden = true
         button.alpha = 0
@@ -590,7 +609,6 @@ class PostDetailViewController: UIViewController {
         accountRefresher: (any CurrentAccountRefreshing)? = nil,
         nodeImageAPIKeyStore: NodeImageAPIKeyStoring = KeychainNodeImageAPIKeyStore(),
         nodeImageUploadClient: NodeImageUploading = NodeImageUploadClient(),
-        floatingPositionStore: FloatingControlPositionStoring = UserDefaultsFloatingControlPositionStore(),
         pasteboardStringWriter: @escaping PasteboardStringWriter = { UIPasteboard.general.string = $0 }
     ) {
         self.presenter = presenter
@@ -603,19 +621,11 @@ class PostDetailViewController: UIViewController {
         self.accountRefresher = accountRefresher ?? CurrentAccountRefresher.shared
         self.nodeImageAPIKeyStore = nodeImageAPIKeyStore
         self.nodeImageUploadClient = nodeImageUploadClient
-        self.floatingReplyButtonContainer = FloatingControlContainerView(
-            accessibilityIdentifier: "post-detail-floating-reply-button",
-            positionStorageKey: FloatingControlPositionKeys.postDetailReplyButton,
-            positionStore: floatingPositionStore
-        )
         self.pasteboardStringWriter = pasteboardStringWriter
         super.init(nibName: nil, bundle: nil)
 
-        if let initialHeader {
-            currentHeaderContent = initialHeader
-            headerRenderedContent = nil
-            scheduleHeaderRender(for: initialHeader)
-        }
+        _ = collectionList
+        currentHeaderContent = initialHeader
     }
 
     required init?(coder: NSCoder) {
@@ -623,20 +633,32 @@ class PostDetailViewController: UIViewController {
     }
 
     deinit {
-        attachmentLayoutRefreshWorkItem?.cancel()
-        tableReloadWorkItem?.cancel()
         toastHideWorkItem?.cancel()
         authorFilterAutoLoadWorkItem?.cancel()
         pageIndicatorHideWorkItem?.cancel()
         imageUploadTask?.cancel()
+        memberLookupTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         configureNavigationItems()
+        if #available(iOS 27.1, *) {
+            // iPhone Duo 开合或旋转时竖排状态会变，作者标题要跟着挂上或撤下。
+            registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (self: Self, _) in
+                self.updateNavigationTitleViewPlacement()
+                self.updateReplyButtonVisibility()
+            }
+        }
         setupUI()
         presenter.viewDidLoad()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        loginCheckTask?.cancel()
+        loginCheckTask = nil
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -646,28 +668,38 @@ class PostDetailViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        floatingReplyButtonContainer.updateFloatingEdgeInsets(
-            in: view,
-            horizontalAnchorView: replyButtonAnchorView
-        )
-        floatingReplyButtonContainer.syncFrame(with: replyButtonAnchorView)
+        collectionList.updateAppearance()
+        updateTableContentInsets()
+    }
+
+    /// 系统把导航栏、Tab 栏竖排在侧边（iPhone Duo 外屏等）。
+    var usesVerticalBar: Bool {
+        guard #available(iOS 27.1, *) else { return false }
+        return traitCollection.verticalBarEdge != .unspecified
+    }
+
+    /// 导航栏竖排时，自定义 titleView 会让系统在顶部额外保留一条横向导航栏，
+    /// 正文上方空出一大块；此时不挂作者标题。
+    func updateNavigationTitleViewPlacement() {
+        let titleView: UIView? = usesVerticalBar ? nil : navigationAuthorTitleView
+        guard navigationItem.titleView !== titleView else { return }
+        navigationItem.titleView = titleView
     }
 
     func configureNavigationItems() {
         title = nil
-        navigationItem.titleView = navigationAuthorTitleView
+        updateNavigationTitleViewPlacement()
         navigationAuthorTitleView.setVisible(false, animated: false)
         if let currentHeaderContent {
             configureNavigationAuthorTitle(with: currentHeaderContent)
         }
 
-        let browserButton = UIBarButtonItem(
-            image: UIImage(systemName: "safari"),
-            style: .plain,
-            target: self,
-            action: #selector(openInBrowserTapped)
-        )
-        browserButton.accessibilityLabel = "在浏览器打开"
+        let browserAction = UIAction(
+            title: DetailListStrings.text("open-in-browser"),
+            image: UIImage(systemName: "safari")
+        ) { [weak self] _ in
+            self?.openInBrowserTapped()
+        }
 
         var moreButton: UIBarButtonItem?
         let refreshAction = UIAction(
@@ -704,44 +736,42 @@ class PostDetailViewController: UIViewController {
 
         moreButton = UIBarButtonItem(
             image: UIImage(systemName: "ellipsis.circle"),
-            menu: UIMenu(children: [editAction, refreshAction, copyLinkAction, shareAction])
+            menu: UIMenu(children: [editAction, refreshAction, copyLinkAction, shareAction, browserAction])
         )
         moreButton?.accessibilityLabel = "更多"
 
-        navigationItem.rightBarButtonItems = [moreButton, browserButton].compactMap { $0 }
+        navigationItem.rightBarButtonItem = moreButton
+        updateVerticalReplyBarItem(visible: false)
     }
 
     func updateTableContentInsets() {
-        let bottomInset = view.safeAreaInsets.bottom
-        tableNode.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: bottomInset, right: 0)
-        tableNode.view.verticalScrollIndicatorInsets.bottom = bottomInset
+        var bottomInset = view.safeAreaInsets.bottom
+        if replyBarView.isHidden == false, replyBarView.frame.isEmpty == false {
+            // 评论栏盖在列表上方，列表底部要让出评论栏占用的高度。
+            bottomInset = max(bottomInset, view.bounds.maxY - replyBarView.frame.minY + Layout.replyBarContentSpacing)
+        }
+        guard collectionList.view.contentInset.bottom != bottomInset else { return }
+        let insets = UIEdgeInsets(top: 0, left: 0, bottom: bottomInset, right: 0)
+        collectionList.view.contentInset = insets
+        detailScrollView.verticalScrollIndicatorInsets.bottom = bottomInset
     }
 
     func setupUI() {
         view.backgroundColor = UIColor.systemBackground
-        tableNode.dataSource = self
-        tableNode.delegate = self
-        tableNode.leadingScreensForBatching = leadingScreensForBatching
-        // 屏幕上方的图片加载后变高时，保持当前可见内容位置不动。
-        tableNode.automaticallyAdjustsContentOffset = true
-        tableNode.view.backgroundColor = UIColor.systemBackground
-        tableNode.view.separatorStyle = .none
-        tableNode.view.showsVerticalScrollIndicator = true
-        tableNode.view.tableFooterView = loadMoreCommentsContainer
         updateTableContentInsets()
-        tableNode.view.translatesAutoresizingMaskIntoConstraints = false
+        detailScrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        view.addSubview(tableNode.view)
+        view.addSubview(detailScrollView)
         view.addSubview(loadingIndicator)
         loginButton.addTarget(self, action: #selector(loginButtonTapped), for: .touchUpInside)
         loadMoreCommentsRefreshButton.addTarget(self, action: #selector(refreshCommentsAtEndTapped), for: .touchUpInside)
         view.addSubview(loginButton)
-        configurePageIndicator()
         toastContainerView.addSubview(toastIconView)
         toastContainerView.addSubview(toastLabel)
         view.addSubview(toastContainerView)
         configureDismissKeyboardGesture()
         configureReplyEditor()
+        configurePageIndicator()
 
         let replyEditorBottomConstraint = replyEditorContainer.bottomAnchor.constraint(
             equalTo: view.keyboardLayoutGuide.topAnchor,
@@ -762,10 +792,11 @@ class PostDetailViewController: UIViewController {
         self.replyContextBarHeightConstraint = replyContextBarHeightConstraint
         self.replyStickerPickerHeightConstraint = replyStickerPickerHeightConstraint
         NSLayoutConstraint.activate([
-            tableNode.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tableNode.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableNode.view.topAnchor.constraint(equalTo: view.topAnchor),
-            tableNode.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            // 左右贴安全区：iPhone Duo 外屏导航栏竖排在侧边，横屏刘海同理，正文不能钻到下面。
+            detailScrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            detailScrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            detailScrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            detailScrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             loadingIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             loadingIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
@@ -776,7 +807,7 @@ class PostDetailViewController: UIViewController {
             toastContainerView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
             toastContainerView.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24),
             toastContainerView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            toastContainerView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            toastContainerView.bottomAnchor.constraint(equalTo: replyBarView.topAnchor, constant: -12),
 
             toastIconView.leadingAnchor.constraint(equalTo: toastContainerView.leadingAnchor, constant: 12),
             toastIconView.centerYAnchor.constraint(equalTo: toastContainerView.centerYAnchor),
@@ -788,10 +819,14 @@ class PostDetailViewController: UIViewController {
             toastLabel.topAnchor.constraint(equalTo: toastContainerView.topAnchor, constant: 10),
             toastLabel.bottomAnchor.constraint(equalTo: toastContainerView.bottomAnchor, constant: -10),
 
-            replyButtonAnchorView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            replyButtonAnchorView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -Layout.replyButtonBottomInset),
-            replyButtonAnchorView.widthAnchor.constraint(equalToConstant: 52),
-            replyButtonAnchorView.heightAnchor.constraint(equalToConstant: 44),
+            replyBarView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: Layout.replyBarHorizontalInset),
+            replyBarView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -Layout.replyBarHorizontalInset),
+            replyBarView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -Layout.replyBarBottomInset),
+            replyBarView.heightAnchor.constraint(greaterThanOrEqualToConstant: Layout.replyBarMinimumHeight),
+            replyBarFadeView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            replyBarFadeView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            replyBarFadeView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            replyBarFadeView.topAnchor.constraint(equalTo: replyBarView.topAnchor, constant: -24),
 
             replyEditorBackdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             replyEditorBackdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -891,26 +926,11 @@ class PostDetailViewController: UIViewController {
     }
 
     private func invalidateRenderedContentAndReload() {
-        renderGeneration += 1
-        commentRenderInFlight.removeAll(keepingCapacity: true)
-        commentRenderedCache.removeAll(keepingCapacity: true)
-        renderedCommentIDs.removeAll(keepingCapacity: true)
-        if let currentHeaderContent {
-            headerRenderedContent = nil
-            scheduleHeaderRender(for: currentHeaderContent)
-        }
-        reloadTableData()
-        preheatCommentRender(for: comments)
+        collectionList.invalidate()
     }
 
     func configureReplyEditor() {
-        replyButton.addTarget(self, action: #selector(replyButtonTapped), for: .touchUpInside)
-        floatingReplyButtonContainer.onAdsorbedEdgeChanged = { [weak self] edge in
-            self?.replyButton.applyFloatingDockedCorners(for: edge)
-        }
-        floatingReplyButtonContainer.hostControl(replyButton)
-        view.addSubview(replyButtonAnchorView)
-        view.addSubview(floatingReplyButtonContainer)
+        configureReplyBar()
         replyEditorBackdrop.addTarget(self, action: #selector(dismissReplyEditor), for: .touchUpInside)
         view.addSubview(replyEditorBackdrop)
         inlineReplySendButton.addTarget(self, action: #selector(sendReplyTapped), for: .touchUpInside)
@@ -931,6 +951,33 @@ class PostDetailViewController: UIViewController {
         replyEditorContainer.addSubview(replyTextView)
         replyEditorContainer.addSubview(replyStickerPickerView)
         view.addSubview(replyEditorContainer)
+        applyReplyEditorGlassIfAvailable()
+    }
+
+    /// iOS 26 起回复弹窗改用液态玻璃，低版本保留原来的实色卡片。
+    private func applyReplyEditorGlassIfAvailable() {
+        guard #available(iOS 26.0, *) else { return }
+        let glassView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        glassView.isUserInteractionEnabled = false
+        glassView.layer.cornerRadius = replyEditorContainer.layer.cornerRadius
+        glassView.layer.cornerCurve = .continuous
+        glassView.clipsToBounds = true
+        glassView.translatesAutoresizingMaskIntoConstraints = false
+        replyEditorContainer.insertSubview(glassView, at: 0)
+        NSLayoutConstraint.activate([
+            glassView.leadingAnchor.constraint(equalTo: replyEditorContainer.leadingAnchor),
+            glassView.trailingAnchor.constraint(equalTo: replyEditorContainer.trailingAnchor),
+            glassView.topAnchor.constraint(equalTo: replyEditorContainer.topAnchor),
+            glassView.bottomAnchor.constraint(equalTo: replyEditorContainer.bottomAnchor)
+        ])
+        // 玻璃自带边缘高光和阴影，去掉实色背景、描边与投影，避免叠出脏边。
+        replyEditorContainer.backgroundColor = .clear
+        replyEditorContainer.layer.borderWidth = 0
+        replyEditorContainer.layer.shadowOpacity = 0
+        // 内部区块改半透明填充色，让玻璃透出来，同时保持输入区可辨认。
+        replyTextView.backgroundColor = .tertiarySystemFill
+        replyContextBar.backgroundColor = .quaternarySystemFill
+        replyStickerPickerView.backgroundColor = .quaternarySystemFill
     }
 
     func configureDismissKeyboardGesture() {
@@ -938,14 +985,13 @@ class PostDetailViewController: UIViewController {
         tapGesture.cancelsTouchesInView = false
         tapGesture.delegate = self
         view.addGestureRecognizer(tapGesture)
-        tableNode.view.keyboardDismissMode = .onDrag
+        detailScrollView.keyboardDismissMode = .onDrag
     }
 
-    func configureHeader(_ content: PostDetailHeaderContent, renderedContent: [RenderedContentBlock]?) {
+    func configureHeader(_ content: PostDetailHeaderContent) {
         currentHeaderContent = content
-        headerRenderedContent = renderedContent
         configureNavigationAuthorTitle(with: content)
-        updateNavigationAuthorVisibility(contentOffsetY: tableNode.contentOffset.y, animated: false)
+        updateNavigationAuthorVisibility(contentOffsetY: detailScrollView.contentOffset.y, animated: false)
     }
 
     func configureNavigationAuthorTitle(with content: PostDetailHeaderContent) {
@@ -977,10 +1023,8 @@ class PostDetailViewController: UIViewController {
     }
 
     func reloadTableData() {
-        tableReloadWorkItem?.cancel()
-        pendingReloadIndexPaths.removeAll()
         guard isViewLoaded else { return }
-        tableNode.reloadData()
+        collectionList.reload()
     }
 
     func cachedDetailImageSize(for url: URL) -> CGSize? {
@@ -1003,54 +1047,10 @@ class PostDetailViewController: UIViewController {
     }
 
     #if DEBUG
-    func testRowCount() -> Int {
-        tableNode(tableNode, numberOfRowsInSection: 0)
-    }
-
     var testPendingInitialAnchorID: String? {
         pendingInitialAnchorID
     }
     #endif
-
-    func scheduleHeaderReload() {
-        guard currentHeaderContent != nil else { return }
-        guard displayMode == .content else { return }
-        guard let row = detailRows.firstIndex(where: { if case .header = $0 { return true }; return false }) else { return }
-        scheduleRowsReload([IndexPath(row: row, section: 0)])
-    }
-
-    func scheduleCommentReload(commentID: String) {
-        guard let commentIndex = comments.firstIndex(where: { $0.id == commentID }) else { return }
-        guard let row = detailRows.firstIndex(where: {
-            if case .comment(let index) = $0 {
-                return index == commentIndex
-            }
-            return false
-        }) else { return }
-        scheduleRowsReload([IndexPath(row: row, section: 0)])
-    }
-
-    func scheduleRowsReload(_ indexPaths: [IndexPath]) {
-        guard isViewLoaded else { return }
-        let rowCount = tableNode(self.tableNode, numberOfRowsInSection: 0)
-        let validIndexPaths = indexPaths.filter { $0.section == 0 && $0.row >= 0 && $0.row < rowCount }
-        guard validIndexPaths.isEmpty == false else { return }
-
-        pendingReloadIndexPaths.formUnion(validIndexPaths)
-        tableReloadWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.isViewLoaded else { return }
-            let reloadIndexPaths = self.pendingReloadIndexPaths.sorted {
-                $0.section == $1.section ? $0.row < $1.row : $0.section < $1.section
-            }
-            self.pendingReloadIndexPaths.removeAll()
-            guard reloadIndexPaths.isEmpty == false else { return }
-            self.tableNode.reloadRows(at: reloadIndexPaths, with: .none)
-        }
-        tableReloadWorkItem = workItem
-        DispatchQueue.main.async(execute: workItem)
-    }
 
     func showLoadingSkeletonIfNeeded() {
         guard hasRenderedDetailContent == false else { return }

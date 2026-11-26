@@ -9,8 +9,9 @@
 /* Begin PBXBuildFile section */
 		7A2000022FA0000000000001 /* ProbeWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7A2000012FA0000000000001 /* ProbeWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7A1000012FA0000000000001 /* Kanna in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1000022FA0000000000001 /* Kanna */; };
-		7A1000042FA0000000000001 /* AsyncDisplayKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1000052FA0000000000001 /* AsyncDisplayKit */; };
+		7A1000012FA0000000000009 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1000022FA0000000000009 /* Markdown */; };
 		7A1000092FA0000000000001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1000082FA0000000000001 /* Kingfisher */; };
+		7A1000262FA0000000000001 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1000272FA0000000000001 /* libwebp */; };
 		7A1000152FA0000000000001 /* JXPhotoBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1000172FA0000000000001 /* JXPhotoBrowser */; };
 		7A1000182FA0000000000001 /* DTCoreText in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1000192FA0000000000001 /* DTCoreText */; };
 		7A10001C2FA0000000000001 /* SVGKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7A10001D2FA0000000000001 /* SVGKit */; };
@@ -135,13 +136,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				7A1000012FA0000000000001 /* Kanna in Frameworks */,
-				7A1000042FA0000000000001 /* AsyncDisplayKit in Frameworks */,
+				7A1000012FA0000000000009 /* Markdown in Frameworks */,
 				7A1000092FA0000000000001 /* Kingfisher in Frameworks */,
 				7A1000152FA0000000000001 /* JXPhotoBrowser in Frameworks */,
 				7A1000182FA0000000000001 /* DTCoreText in Frameworks */,
 				7A10001C2FA0000000000001 /* SVGKit in Frameworks */,
 				7A1000202FA0000000000001 /* FramePlay in Frameworks */,
 				7A1000232FA0000000000001 /* WhatsNewKit in Frameworks */,
+				7A1000262FA0000000000001 /* libwebp in Frameworks */,
 				FA1000010000000000000001 /* FirebaseCrashlytics in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -222,13 +224,14 @@
 			name = nodeseek;
 			packageProductDependencies = (
 				7A1000022FA0000000000001 /* Kanna */,
-				7A1000052FA0000000000001 /* AsyncDisplayKit */,
+				7A1000022FA0000000000009 /* Markdown */,
 				7A1000082FA0000000000001 /* Kingfisher */,
 				7A1000172FA0000000000001 /* JXPhotoBrowser */,
 				7A1000192FA0000000000001 /* DTCoreText */,
 				7A10001D2FA0000000000001 /* SVGKit */,
 				7A1000212FA0000000000001 /* FramePlay */,
 				7A1000242FA0000000000001 /* WhatsNewKit */,
+				7A1000272FA0000000000001 /* libwebp */,
 				FA1000020000000000000001 /* FirebaseCrashlytics */,
 			);
 			productName = nodeseek;
@@ -293,13 +296,14 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				7A1000032FA0000000000001 /* XCRemoteSwiftPackageReference "Kanna" */,
-				7A1000062FA0000000000001 /* XCRemoteSwiftPackageReference "Texture" */,
+				7A1000032FA0000000000009 /* XCRemoteSwiftPackageReference "Markdown" */,
 				7A1000072FA0000000000001 /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				7A1000162FA0000000000001 /* XCRemoteSwiftPackageReference "PhotoBrowser" */,
 				7A10001A2FA0000000000001 /* XCRemoteSwiftPackageReference "DTCoreText" */,
 				7A10001B2FA0000000000001 /* XCRemoteSwiftPackageReference "SVGKit" */,
 				7A1000222FA0000000000001 /* XCLocalSwiftPackageReference "Packages/FramePlay" */,
 				7A1000252FA0000000000001 /* XCRemoteSwiftPackageReference "WhatsNewKit" */,
+				7A1000282FA0000000000001 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */,
 				FA1000030000000000000001 /* Firebase */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -414,7 +418,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.4.2;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mistj.nodeseek.ProbeWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -444,7 +448,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.4.2;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mistj.nodeseek.ProbeWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "match AppStore com.mistj.nodeseek.ProbeWidget";
@@ -475,7 +479,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4.2;
+				MARKETING_VERSION = 1.5.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lsqlite3",
@@ -498,6 +502,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_OPTIMIZATION = space;
 				CODE_SIGN_ENTITLEMENTS = nodeseek/nodeseek-release.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution: chuang chen (Z9K94479DQ)";
 				CODE_SIGN_STYLE = Manual;
@@ -512,7 +517,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4.2;
+				MARKETING_VERSION = 1.5.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lsqlite3",
@@ -661,7 +666,7 @@
 				DEVELOPMENT_TEAM = Z9K94479DQ;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4.2;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mistj.nodeseekTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -683,7 +688,7 @@
 				DEVELOPMENT_TEAM = Z9K94479DQ;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4.2;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mistj.nodeseekTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -753,12 +758,12 @@
 				minimumVersion = 6.0.0;
 			};
 		};
-		7A1000062FA0000000000001 /* XCRemoteSwiftPackageReference "Texture" */ = {
+		7A1000032FA0000000000009 /* XCRemoteSwiftPackageReference "Markdown" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/FluidGroup/Texture.git";
+			repositoryURL = "https://github.com/swiftlang/swift-markdown.git";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 3.0.4;
+				kind = exactVersion;
+				version = 0.7.3;
 			};
 		};
 		7A1000072FA0000000000001 /* XCRemoteSwiftPackageReference "Kingfisher" */ = {
@@ -807,9 +812,22 @@
 			traits = ();
 			requirement = {kind = upToNextMajorVersion; minimumVersion = 13.2.0; };
 		};
+		7A1000282FA0000000000001 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SDWebImage/libwebp-Xcode.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.6.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		7A1000272FA0000000000001 /* libwebp */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A1000282FA0000000000001 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */;
+			productName = libwebp;
+		};
 		7A1000242FA0000000000001 /* WhatsNewKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 7A1000252FA0000000000001 /* XCRemoteSwiftPackageReference "WhatsNewKit" */;
@@ -825,10 +843,10 @@
 			package = 7A1000032FA0000000000001 /* XCRemoteSwiftPackageReference "Kanna" */;
 			productName = Kanna;
 		};
-		7A1000052FA0000000000001 /* AsyncDisplayKit */ = {
+		7A1000022FA0000000000009 /* Markdown */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7A1000062FA0000000000001 /* XCRemoteSwiftPackageReference "Texture" */;
-			productName = AsyncDisplayKit;
+			package = 7A1000032FA0000000000009 /* XCRemoteSwiftPackageReference "Markdown" */;
+			productName = Markdown;
 		};
 		7A1000082FA0000000000001 /* Kingfisher */ = {
 			isa = XCSwiftPackageProductDependency;

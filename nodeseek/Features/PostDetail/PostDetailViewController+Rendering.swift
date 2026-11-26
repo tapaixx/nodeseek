@@ -5,37 +5,11 @@
 //  Created by Codex on 2026/4/30.
 //
 
-import AsyncDisplayKit
 import DTCoreText
 import UIKit
 
 extension PostDetailViewController {
-    func scheduleHeaderRender(for content: PostDetailHeaderContent) {
-        let generation = renderGeneration
-        let html = content.contentHTML
-        let signatureHTML = content.signatureHTML
-        let showsSignature = PostSignatureDisplaySettings.shared.showsSignatures
-        let width = availableHeaderContentWidth
-        let baseURL = baseURL
-        renderQueue.async { [weak self] in
-            let renderedContent = Self.makeRenderedContent(
-                html: html,
-                signatureHTML: signatureHTML,
-                baseURL: baseURL,
-                maxImageWidth: width,
-                showsSignature: showsSignature
-            )
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard self.renderGeneration == generation else { return }
-                guard self.currentHeaderContent?.postID == content.postID else { return }
-                self.configureHeader(content, renderedContent: renderedContent)
-                self.scheduleHeaderReload()
-            }
-        }
-    }
-
-    static func makeRenderedContent(
+    nonisolated static func makeRenderedContent(
         html: String,
         signatureHTML: String? = nil,
         baseURL: URL,
@@ -60,7 +34,7 @@ extension PostDetailViewController {
         return mergedBlocks.isEmpty ? nil : mergedBlocks
     }
 
-    private static func renderSignatureBlocks(
+    private nonisolated static func renderSignatureBlocks(
         signatureHTML: String?,
         renderer: DTCoreTextHTMLContentRenderer,
         baseURL: URL,
@@ -80,11 +54,11 @@ extension PostDetailViewController {
         return styledSignatureBlocks(blocks)
     }
 
-    private static func styledSignatureBlocks(_ blocks: [RenderedContentBlock]) -> [RenderedContentBlock] {
+    nonisolated static func styledSignatureBlocks(_ blocks: [RenderedContentBlock]) -> [RenderedContentBlock] {
         blocks.compactMap { styledSignatureBlock($0) }
     }
 
-    private static func styledSignatureBlock(_ block: RenderedContentBlock) -> RenderedContentBlock? {
+    private nonisolated static func styledSignatureBlock(_ block: RenderedContentBlock) -> RenderedContentBlock? {
         switch block {
         case .text(let attributedText):
             let styledText = styledSignatureAttributedText(attributedText)
@@ -99,14 +73,14 @@ extension PostDetailViewController {
         }
     }
 
-    private static func styledSignatureAttributedText(_ attributedText: NSAttributedString) -> NSAttributedString {
+    private nonisolated static func styledSignatureAttributedText(_ attributedText: NSAttributedString) -> NSAttributedString {
         let mutable = NSMutableAttributedString(attributedString: attributedText)
         guard mutable.length > 0 else { return mutable }
         applySignatureTextAttributes(to: mutable, range: NSRange(location: 0, length: mutable.length))
         return mutable
     }
 
-    private static func mergedBodyBlocks(
+    private nonisolated static func mergedBodyBlocks(
         _ bodyBlocks: [RenderedContentBlock],
         withSignatureBlocks signatureBlocks: [RenderedContentBlock]
     ) -> [RenderedContentBlock] {
@@ -127,7 +101,7 @@ extension PostDetailViewController {
         return merged
     }
 
-    private static func mergedTextBlock(_ body: NSAttributedString, signature: NSAttributedString) -> NSAttributedString {
+    private nonisolated static func mergedTextBlock(_ body: NSAttributedString, signature: NSAttributedString) -> NSAttributedString {
         let merged = NSMutableAttributedString(attributedString: body)
         let normalizedSignature = NSMutableAttributedString(attributedString: signature)
         trimTrailingWhitespaceAndNewlines(in: merged)
@@ -140,7 +114,7 @@ extension PostDetailViewController {
         return merged
     }
 
-    private static func trimLeadingWhitespaceAndNewlines(in attributed: NSMutableAttributedString) {
+    private nonisolated static func trimLeadingWhitespaceAndNewlines(in attributed: NSMutableAttributedString) {
         guard attributed.length > 0 else { return }
         let source = attributed.string as NSString
         var upperBound = 0
@@ -153,7 +127,7 @@ extension PostDetailViewController {
         attributed.deleteCharacters(in: NSRange(location: 0, length: upperBound))
     }
 
-    private static func trimTrailingWhitespaceAndNewlines(in attributed: NSMutableAttributedString) {
+    private nonisolated static func trimTrailingWhitespaceAndNewlines(in attributed: NSMutableAttributedString) {
         guard attributed.length > 0 else { return }
         let source = attributed.string as NSString
         var lowerBound = source.length
@@ -166,7 +140,7 @@ extension PostDetailViewController {
         attributed.deleteCharacters(in: NSRange(location: lowerBound, length: source.length - lowerBound))
     }
 
-    private static func applySignatureTextAttributes(
+    private nonisolated static func applySignatureTextAttributes(
         to mutable: NSMutableAttributedString,
         range: NSRange
     ) {
@@ -194,7 +168,7 @@ extension PostDetailViewController {
         }
     }
 
-    private static func applySignatureParagraphStyle(
+    private nonisolated static func applySignatureParagraphStyle(
         to mutable: NSMutableAttributedString,
         range: NSRange
     ) {
@@ -222,77 +196,13 @@ extension PostDetailViewController {
         }
     }
 
-    var availableHeaderContentWidth: CGFloat {
-        let width = tableNode.view.bounds.width > 0 ? tableNode.view.bounds.width : view.bounds.width
-        return max((width > 0 ? width : 320) - Layout.horizontalInset * 2, 1)
-    }
-
+    /// 楼层预览按回复楼层的正文宽度排版。
     var availableCommentContentWidth: CGFloat {
-        let width = tableNode.view.bounds.width > 0 ? tableNode.view.bounds.width : view.bounds.width
+        let width = detailScrollView.bounds.width > 0 ? detailScrollView.bounds.width : view.bounds.width
         let contentWidth = (width > 0 ? width : 320)
             - PostDetailContentLayout.horizontalInset * 2
             - PostDetailContentLayout.avatarSize
             - PostDetailContentLayout.avatarSpacing
         return max(contentWidth, 1)
-    }
-
-    func scheduleAttachmentLayoutRefresh() {
-        attachmentLayoutRefreshWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.isViewLoaded else { return }
-            if NodeSeekDebugConfig.enableDetailRenderDiagnostics {
-                let visibleRows = self.tableNode.indexPathsForVisibleRows().map { "\($0.section):\($0.row)" }.joined(separator: ",")
-                AppLog.info(.rendering, "scheduleAttachmentLayoutRefresh fire visible=\(visibleRows) rows=\(self.tableNode(self.tableNode, numberOfRowsInSection: 0))")
-            }
-            // 先重测再在同一次更新里问行高。分开调用时，表会沿用占位高度。
-            self.tableNode.performBatch(animated: false, updates: {
-                self.tableNode.relayoutItems()
-            })
-        }
-        attachmentLayoutRefreshWorkItem = workItem
-        if NodeSeekDebugConfig.enableDetailRenderDiagnostics {
-            AppLog.info(.rendering, "scheduleAttachmentLayoutRefresh queued")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
-    }
-
-    func preheatCommentRender(for comments: [Comment]) {
-        for comment in comments {
-            scheduleCommentRenderIfNeeded(for: comment)
-        }
-    }
-
-    func scheduleCommentRenderIfNeeded(for comment: Comment) {
-        let commentID = comment.id
-        guard renderedCommentIDs.contains(commentID) == false else { return }
-        guard commentRenderInFlight.insert(commentID).inserted else { return }
-
-        let generation = renderGeneration
-        let html = comment.contentHTML
-        let signatureHTML = comment.signatureHTML
-        let showsSignature = PostSignatureDisplaySettings.shared.showsSignatures
-        let width = availableCommentContentWidth
-        let baseURL = baseURL
-        renderQueue.async { [weak self] in
-            let renderedContent = Self.makeRenderedContent(
-                html: html,
-                signatureHTML: signatureHTML,
-                baseURL: baseURL,
-                maxImageWidth: width,
-                showsSignature: showsSignature
-            )
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard self.renderGeneration == generation else { return }
-                self.commentRenderInFlight.remove(commentID)
-                self.renderedCommentIDs.insert(commentID)
-                if let renderedContent {
-                    self.commentRenderedCache[commentID] = renderedContent
-                } else {
-                    self.commentRenderedCache.removeValue(forKey: commentID)
-                }
-                self.scheduleCommentReload(commentID: commentID)
-            }
-        }
     }
 }

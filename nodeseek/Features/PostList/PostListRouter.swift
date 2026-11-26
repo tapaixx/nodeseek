@@ -51,8 +51,7 @@ class PostListRouter: PostListRouterProtocol {
     }
 
     func navigateToLogin(onClose: @escaping @MainActor () -> Void) {
-        let loginViewController = LoginWebViewController(onClose: onClose)
-        show(loginViewController)
+        LoginWebViewController.open(from: viewController, onClose: onClose)
     }
 
     func navigateToUserProfile(profileURL: URL) {
@@ -133,6 +132,14 @@ class PostListRouter: PostListRouterProtocol {
         }
 
         show(recentViewController)
+    }
+
+    func navigateToHotList() {
+        let hotListViewController = HotListViewController()
+        hotListViewController.onSelectPost = { [weak self, weak hotListViewController] post in
+            self?.pushPostDetail(post: post, page: 1, anchorID: nil, from: hotListViewController)
+        }
+        show(hotListViewController)
     }
 
     func navigateToUserDiscussions() {

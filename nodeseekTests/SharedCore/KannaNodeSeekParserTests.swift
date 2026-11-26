@@ -29,6 +29,30 @@ enum FixtureLoader {
 }
 
 struct KannaNodeSeekParserTests {
+    @Test func laterPageReadsOwnerFromPostConfigAndKeepsFirstReplySeparate() throws {
+        let html = """
+        <script id="nodeseek-captured-config" type="application/json">
+          {"postData":{"op":{"uid":9,"name":"酒神"}}}
+        </script>
+        <div class="nsk-post">
+          <div class="post-title"><a class="post-title-link">对邀请码发放机制的调整总结</a></div>
+          <ul class="comments"><li class="content-item" data-comment-id="12147134">
+            <a class="author-name" href="/space/32">又是熟悉的旋律</a>
+            <a class="floor-link">#11</a><article class="post-content">回复</article>
+          </li></ul>
+        </div>
+        """
+        let parser = KannaNodeSeekParser(baseURL: NodeSeekSite.baseURL)
+        let detail = try parser.parsePostDetail(html: html, url: NodeSeekSite.postURL(id: "893437", page: 2))
+
+        #expect(detail.title == "对邀请码发放机制的调整总结")
+        #expect(detail.authorName == "酒神")
+        #expect(detail.authorProfileURL?.path == "/space/9")
+        #expect(detail.contentHTML.isEmpty)
+        #expect(detail.comments.first?.authorName == "又是熟悉的旋律")
+        #expect(detail.comments.first?.floorText == "#11")
+    }
+
     @Test func parsesAuthorStatusBadgesForPostAndComments() throws {
         let html = """
         <div class="nsk-post-wrapper"><div class="nsk-post">
@@ -606,6 +630,23 @@ struct KannaNodeSeekParserTests {
         #expect(detail.favoriteCount == 10)
     }
 
+    @Test func favoriteCountIgnoresEditorNameAndYearBeforeMenuIsMounted() throws {
+        let url = URL(string: "https://www.nodeseek.com/post-1068729-1")!
+        let parser = KannaNodeSeekParser(baseURL: url)
+        for count in [nil, 0, 2026] as [Int?] {
+            let config = count.map { "<script id='nodeseek-captured-config' type='application/json'>{\"postData\":{\"collectionCount\":\($0)}}</script>" } ?? ""
+            let html = """
+            <div class="nsk-post"><div class="post-title"><h1><a class="post-title-link">主题</a></h1></div>
+            <div id="0" data-comment-id="1" class="content-item">
+            <span class="date-updated" title="Edited 2026-11-20 22:06:19 by 珍宝收藏家">edited 8min ago</span>
+            <article class="post-content"><a title="收藏教程 2019">第 2 章</a></article>
+            <div class="comment-menu-mount"></div></div></div>\(config)
+            """
+            let detail = try parser.parsePostDetail(html: html, url: url)
+            #expect(detail.favoriteCount == count)
+        }
+    }
+
     @Test func parsesFavoriteCountFromRenderedMenuBeforeGenericStarMatches() throws {
         let html = """
         <div class="nsk-post">
@@ -628,6 +669,43 @@ struct KannaNodeSeekParserTests {
         let detail = try parser.parsePostDetail(html: html, url: URL(string: "https://www.nodeseek.com/post-1-1")!)
 
         #expect(detail.favoriteCount == 10)
+    }
+
+    @Test(arguments: [nil, 0, 7, 2026] as [Int?])
+    func favoriteCountIgnoresYearInPostContent(configuredCount: Int?) throws {
+        let config = configuredCount.map {
+            #"<script id="nodeseek-captured-config" type="application/json">{"postData":{"collectionCount":\#($0),"collected":true}}</script>"#
+        } ?? ""
+        let html = """
+        <div class="nsk-post">
+          <div class="post-title"><h1>测试</h1></div>
+          <div id="0" class="content-item">
+            <article class="post-content"><a title="收藏列表">2026 年度书单</a></article>
+            <div class="signature"><div class="comment-menu">
+              <span class="menu-item \(configuredCount == nil ? "clicked" : "")" title="收藏">2026</span>
+            </div></div>
+          </div>
+        </div>
+        \(config)
+        """
+        let parser = KannaNodeSeekParser(baseURL: NodeSeekSite.baseURL)
+        let detail = try parser.parsePostDetail(html: html, url: NodeSeekSite.postURL(id: "1", page: 1))
+        #expect(detail.favoriteCount == configuredCount)
+        #expect(detail.isFavoriteCollected == (configuredCount != nil))
+    }
+
+    @Test(arguments: [("2026-11-20", nil), ("2026", 2026)] as [(String, Int?)])
+    func legacyFavoriteButtonReadsOnlyStandaloneSiblingCounts(text: String, expected: Int?) throws {
+        let html = """
+        <div class="nsk-post"><div class="post-title"><h1>测试</h1></div>
+          <div id="0" class="content-item"><article class="post-content">正文<span class="comment-menu-mount"></span></article>
+            <button title="收藏"></button><span>\(text)</span>
+          </div>
+        </div>
+        """
+        let parser = KannaNodeSeekParser(baseURL: NodeSeekSite.baseURL)
+        let detail = try parser.parsePostDetail(html: html, url: NodeSeekSite.postURL(id: "1", page: 1))
+        #expect(detail.favoriteCount == expected)
     }
 
     @Test func prefersRenderedReactionCountsOverStaleCapturedConfiguration() throws {
@@ -757,6 +835,7 @@ struct KannaNodeSeekParserTests {
         let post = try #require(try parser.parsePostList(html: html).first)
 
         #expect(post.authorName.isEmpty)
+        #expect(post.authorProfileURL == nil)
         #expect(post.avatarURL == nil)
     }
 
@@ -797,6 +876,7 @@ struct KannaNodeSeekParserTests {
         #expect(!post.isLocked)
         #expect(post.title.contains("服务器行业黑话大全"))
         #expect(post.authorName == "斯巴达")
+        #expect(post.authorProfileURL?.path == "/space/1769")
         #expect(post.nodeName == "日常")
         #expect(post.replyCount == 2403)
         #expect(post.viewCount == 169842)
@@ -999,6 +1079,39 @@ struct KannaNodeSeekParserTests {
         #expect(detail.comments.isEmpty)
     }
 
+    @Test(arguments: [
+        ("404 Not Found😭", nil), ("请在 24 小时后重试", nil),
+        ("403 权限不足，查看本帖需要 Lv. 2，您当前 Lv1", 2),
+        ("您当前 Lv3，权限不足", nil), ("需要注册用户才能查看", nil)
+    ] as [(String, Int?)])
+    func onlyAnExplicitRequiredLevelProducesABadge(notice: String, level: Int?) throws {
+        let parser = KannaNodeSeekParser(baseURL: URL(string: "https://www.nodeseek.com")!)
+        let html = "<title>NodeSeek</title><div id='nsk-body'><div id='nsk-body-left'><p>\(notice)</p></div></div>"
+        let detail = try parser.parsePostDetail(html: html, url: URL(string: "https://www.nodeseek.com/post-42-1")!)
+        #expect(detail.requiredReadingLevel == level)
+        #expect(detail.isRestricted)
+        #expect(detail.visibleMarkdown == nil)
+        #expect(detail.contentHTML == notice)
+        if notice.hasPrefix("404") {
+            #expect(detail.title == NSLocalizedString("帖子不存在", tableName: "DetailPrototype", comment: ""))
+        }
+    }
+
+    @Test func ordinaryPostCanDiscuss404WithoutBecomingUnavailable() throws {
+        let html = """
+        <div id="nsk-body"><div id="nsk-body-left"><div class="nsk-post">
+        <div class="post-title"><h1><a class="post-title-link">排查 404</a></h1></div>
+        <div class="content-item"><article class="post-content"><p>404 Not Found😭</p></article></div>
+        </div></div></div>
+        """
+        let url = URL(string: "https://www.nodeseek.com/post-42-1")!
+        let detail = try KannaNodeSeekParser(baseURL: url).parsePostDetail(html: html, url: url)
+        #expect(detail.title == "排查 404")
+        #expect(!detail.isRestricted)
+        #expect(detail.requiredReadingLevel == nil)
+        #expect(detail.contentHTML.contains("404 Not Found"))
+    }
+
     @Test func parsesUnknownNodeSeekEmptyStateNoticeFromBodyLeftFallback() throws {
         let html = """
         <html data-server-rendered="true">
@@ -1071,8 +1184,12 @@ struct KannaNodeSeekParserTests {
         #expect(detail.requiredReadingLevel == 1)
     }
 
-    @Test func parsesPostDetailPaginationFromFixture() throws {
-        let html = try FixtureLoader.html(named: "post-703863-1")
+    @Test(arguments: [true, false])
+    func parsesPostDetailPaginationFromFixture(hasNextArrow: Bool) throws {
+        let fixture = try FixtureLoader.html(named: "post-703863-1")
+        let html = hasNextArrow ? fixture : fixture.replacingOccurrences(
+            of: #"<a[^>]*class="pager-next"[^>]*>.*?</a>"#, with: "", options: .regularExpression
+        )
         let parser = KannaNodeSeekParser(baseURL: URL(string: "https://www.nodeseek.com")!)
 
         let detail = try parser.parsePostDetail(
@@ -1085,6 +1202,7 @@ struct KannaNodeSeekParserTests {
         #expect(pagination.currentPage == 1)
         #expect(pagination.previousPage == nil)
         #expect(pagination.nextPage == 2)
+        #expect(!detail.isLastPage)
         #expect(pagination.items.map(\.page) == [1, 2, 3, 4])
         #expect(pagination.items.first?.isCurrent == true)
         #expect(pagination.items.dropFirst().first?.isCurrent == false)

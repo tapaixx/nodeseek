@@ -59,13 +59,51 @@ class PostDetailRouter: PostDetailRouterProtocol {
     }
 
     func navigateToLogin(onClose: @escaping @MainActor () -> Void) {
-        let loginViewController = LoginWebViewController(onClose: onClose)
-        if let navigationController = viewController?.navigationController {
-            navigationController.pushViewController(loginViewController, animated: true)
-            return
-        }
+        LoginWebViewController.open(from: viewController, onClose: onClose)
+    }
 
-        let navigationWrapper = MessageNavigationController(rootViewController: loginViewController)
-        viewController?.present(navigationWrapper, animated: true)
+    func presentThreadedReplies(rootComment: Comment, coordinator: ThreadedReplyCoordinator) {
+        guard let detailVC = viewController as? PostDetailViewController else { return }
+        let sheetVC = ThreadedRepliesSheetViewController(
+            rootComment: rootComment,
+            coordinator: coordinator,
+            renderer: detailVC.collectionList.renderer,
+            onLink: { [weak detailVC] url in
+                detailVC?.dismiss(animated: true) {
+                    detailVC?.handleContentLinkTap(url)
+                }
+            },
+            onAuthorTapped: { [weak detailVC] profileURL in
+                detailVC?.dismiss(animated: true) {
+                    detailVC?.openUserInfo(profileURL: profileURL)
+                }
+            },
+            onRequireLogin: { [weak detailVC] in
+                detailVC?.dismiss(animated: true) {
+                    detailVC?.presenter.didTapLogin()
+                }
+            },
+            imageSize: { [weak detailVC] url in detailVC?.cachedDetailImageSize(for: url) },
+            onImageSize: { [weak detailVC] url, size in detailVC?.cacheDetailImageSize(size, for: url) }
+        )
+        sheetVC.modalPresentationStyle = .pageSheet
+        if let sheet = sheetVC.sheetPresentationController {
+            sheet.detents = Self.readingSheetDetents(for: detailVC.traitCollection)
+            sheet.selectedDetentIdentifier = .large
+            sheet.prefersGrabberVisible = true
+            sheet.prefersScrollingExpandsWhenScrolledToEdge = true
+            sheet.preferredCornerRadius = 18
+        }
+        detailVC.present(sheetVC, animated: true)
+    }
+
+    static func readingSheetDetents(for traits: UITraitCollection) -> [UISheetPresentationController.Detent] {
+        let detents: [UISheetPresentationController.Detent] = [.medium(), .large()]
+        if #available(iOS 26.1, *), traits.userInterfaceStyle == .dark {
+            for detent in detents {
+                detent.backgroundEffect = UIColorEffect(color: .systemBackground)
+            }
+        }
+        return detents
     }
 }

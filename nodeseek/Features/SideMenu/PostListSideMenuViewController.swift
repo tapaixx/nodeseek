@@ -17,6 +17,7 @@ final class PostListSideMenuViewController: UIViewController {
     var onCheckInTapped: (() -> Void)?
     var onNotificationTapped: ((URL) -> Void)?
     var onRecentVisitedTapped: (() -> Void)?
+    var onHotListTapped: (() -> Void)?
     var onUserDiscussionsTapped: (() -> Void)?
     var onUserCommentsTapped: (() -> Void)?
     var onUserCollectionsTapped: (() -> Void)?
@@ -108,6 +109,10 @@ final class PostListSideMenuViewController: UIViewController {
         return button
     }()
 
+    private let switchAccountButton = AccountSwitchIconButton(
+        accessibilityIdentifier: "post-list-side-menu-switch-account-button"
+    )
+
     private let extensionEntryStackView: UIStackView = {
         let stackView = UIStackView()
         stackView.axis = .horizontal
@@ -165,6 +170,12 @@ final class PostListSideMenuViewController: UIViewController {
     private let recentVisitedButton: UIButton = {
         let button = PostListSideMenuViewController.makeMenuButton(title: "最近浏览", systemImageName: "clock.arrow.circlepath")
         button.accessibilityIdentifier = "post-list-side-menu-recent-visited-button"
+        return button
+    }()
+
+    private let hotListButton: UIButton = {
+        let button = PostListSideMenuViewController.makeMenuButton(title: HotListL10n.text("热榜"), systemImageName: "flame")
+        button.accessibilityIdentifier = "post-list-side-menu-hot-list-button"
         return button
     }()
 
@@ -316,6 +327,10 @@ final class PostListSideMenuViewController: UIViewController {
             : "登录后同步账号信息"
         accountHeaderButton.accessibilityLabel = account.isLoggedIn ? "账号信息" : "登录账号"
         accountHeaderButton.isEnabled = !account.isLoggedIn || account.profileURL != nil
+        switchAccountButton.isHidden = !AccountSwitchIconButton.shouldShow(
+            isLoggedIn: account.isLoggedIn,
+            hasSavedAccounts: AccountsModule.hasSavedAccounts
+        )
         setExtensionEntriesVisible(account.isLoggedIn)
         notificationURL = account.notification?.url ?? NodeSeekSite.baseURL.appendingPathComponent("notification")
         if account.isLoggedIn == false {
@@ -388,11 +403,13 @@ final class PostListSideMenuViewController: UIViewController {
         view.isHidden = true
         backdropView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(backdropTapped)))
         accountHeaderButton.addTarget(self, action: #selector(accountHeaderTapped), for: .touchUpInside)
+        switchAccountButton.addTarget(self, action: #selector(switchAccountButtonTapped), for: .touchUpInside)
         settingsButton.addTarget(self, action: #selector(settingsButtonTapped), for: .touchUpInside)
         newDiscussionButton.addTarget(self, action: #selector(newDiscussionButtonTapped), for: .touchUpInside)
         checkInButton.addTarget(self, action: #selector(checkInButtonTapped), for: .touchUpInside)
         notificationButton.addTarget(self, action: #selector(notificationButtonTapped), for: .touchUpInside)
         recentVisitedButton.addTarget(self, action: #selector(recentVisitedButtonTapped), for: .touchUpInside)
+        hotListButton.addTarget(self, action: #selector(hotListButtonTapped), for: .touchUpInside)
         probeButton.addTarget(self, action: #selector(probeButtonTapped), for: .touchUpInside)
         mailButton.addTarget(self, action: #selector(mailButtonTapped), for: .touchUpInside)
         tradeButton.addTarget(self, action: #selector(tradeButtonTapped), for: .touchUpInside)
@@ -407,6 +424,7 @@ final class PostListSideMenuViewController: UIViewController {
         sideMenuView.addSubview(nameLabel)
         sideMenuView.addSubview(statsLabel)
         sideMenuView.addSubview(accountHeaderButton)
+        sideMenuView.addSubview(switchAccountButton)
         sideMenuView.addSubview(extensionEntryStackView)
         extensionEntryStackView.addArrangedSubview(postsEntryButton)
         extensionEntryStackView.addArrangedSubview(commentsEntryButton)
@@ -416,6 +434,7 @@ final class PostListSideMenuViewController: UIViewController {
         sideMenuView.addSubview(notificationButton)
         sideMenuView.addSubview(searchButton)
         sideMenuView.addSubview(recentVisitedButton)
+        sideMenuView.addSubview(hotListButton)
         sideMenuView.addSubview(probeButton)
         sideMenuView.addSubview(mailButton)
         sideMenuView.addSubview(tradeButton)
@@ -444,11 +463,14 @@ final class PostListSideMenuViewController: UIViewController {
             avatarImageView.heightAnchor.constraint(equalToConstant: SideMenuLayout.avatarSize),
 
             nameLabel.leadingAnchor.constraint(equalTo: avatarImageView.trailingAnchor, constant: 14),
-            nameLabel.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
+            nameLabel.trailingAnchor.constraint(equalTo: switchAccountButton.leadingAnchor, constant: -12),
             nameLabel.topAnchor.constraint(equalTo: avatarImageView.topAnchor, constant: 8),
 
+            switchAccountButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
+            switchAccountButton.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+
             statsLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            statsLabel.trailingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
+            statsLabel.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
             statsLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 6),
 
             accountHeaderButton.leadingAnchor.constraint(equalTo: avatarImageView.leadingAnchor),
@@ -486,8 +508,13 @@ final class PostListSideMenuViewController: UIViewController {
 
             recentVisitedButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             recentVisitedButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
-            recentVisitedButton.bottomAnchor.constraint(equalTo: probeButton.topAnchor, constant: -8),
+            recentVisitedButton.bottomAnchor.constraint(equalTo: hotListButton.topAnchor, constant: -8),
             Self.menuButtonHeight(recentVisitedButton),
+
+            hotListButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
+            hotListButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
+            hotListButton.bottomAnchor.constraint(equalTo: probeButton.topAnchor, constant: -8),
+            Self.menuButtonHeight(hotListButton),
 
             searchButton.leadingAnchor.constraint(equalTo: sideMenuView.leadingAnchor, constant: SideMenuLayout.horizontalInset),
             searchButton.trailingAnchor.constraint(equalTo: sideMenuView.trailingAnchor, constant: -SideMenuLayout.horizontalInset),
@@ -589,6 +616,11 @@ final class PostListSideMenuViewController: UIViewController {
         onRecentVisitedTapped?()
     }
 
+    @objc private func hotListButtonTapped() {
+        hide(animated: true)
+        onHotListTapped?()
+    }
+
     @objc private func probeButtonTapped() {
         hide(animated: true)
         onProbeTapped?()
@@ -622,6 +654,12 @@ final class PostListSideMenuViewController: UIViewController {
     @objc private func favoritesEntryButtonTapped() {
         hide(animated: true)
         onUserCollectionsTapped?()
+    }
+
+    @objc private func switchAccountButtonTapped() {
+        hide(animated: true)
+        let presenter = parent ?? self
+        AccountsModule.presentAccountSwitcher(from: presenter)
     }
 
     private func setVisible(_ visible: Bool, animated: Bool) {

@@ -271,6 +271,11 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             attribute: "src"
         ).flatMap { URL(string: $0, relativeTo: baseURL)?.absoluteURL }
         let authorName = firstText(in: item, xpaths: [XPathRules.postAuthor, XPathRules.fallbackAuthor]) ?? ""
+        let authorProfileURL = firstAttribute(
+            in: item,
+            xpaths: [XPathRules.postAuthor, XPathRules.postAvatar + "/ancestor::a[1]"],
+            attribute: "href"
+        ).flatMap(normalizeUserProfileURL)
         let nodeName = firstText(in: item, xpaths: [XPathRules.postNode, XPathRules.fallbackNode])
         let viewNode = item.at_xpath(XPathRules.viewCount)
         let viewText = viewNode?["title"] ?? viewNode?.text ?? ""
@@ -294,7 +299,8 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             isPinned: isPinned,
             isLocked: isLocked,
             requiredReadingLevel: requiredReadingLevel,
-            avatarURL: avatarURL
+            avatarURL: avatarURL,
+            authorProfileURL: authorProfileURL
         )
     }
 
@@ -336,15 +342,18 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             ?? document.at_xpath("//meta[@name='twitter:title']")?["content"]?.trimmedNonEmpty
             ?? document.at_xpath("//title")?.text?.normalizedNonEmpty
         let title = Self.isGenericPostDetailTitle(parsedTitle)
-            ? restrictedNotice.map { _ in "受限帖子" }
+            ? restrictedNotice.map(Self.unavailablePostTitle)
             : parsedTitle
 
         guard let title else {
             throw NodeSeekParserError.postDetailNotFound
         }
 
+        let page = Self.postPage(from: url) ?? 1
         let bodyItem = document.at_xpath(XPathRules.postDetailBodyItem)
-        let authorName = bodyItem.flatMap { firstText(in: $0, xpaths: [XPathRules.contentAuthor]) } ?? ""
+        let owner = page > 1 && bodyItem == nil && restrictedNotice == nil
+            ? paginationOwner(in: document) : nil
+        let authorName = bodyItem.flatMap { firstText(in: $0, xpaths: [XPathRules.contentAuthor]) } ?? owner?.name ?? ""
         let avatarURL = bodyItem.flatMap {
             firstAttribute(
                 in: $0,
@@ -352,7 +361,7 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
                 attribute: "src"
             )
         }.flatMap { URL(string: $0, relativeTo: baseURL)?.absoluteURL }
-        let authorProfileURL = bodyItem.flatMap { parseUserProfileURL(in: $0) }
+        let authorProfileURL = bodyItem.flatMap { parseUserProfileURL(in: $0) } ?? owner?.profileURL
         let createdAtText = bodyItem.flatMap { firstText(in: $0, xpaths: [XPathRules.contentCreatedAt]) }
         let categoryText = bodyItem.flatMap { firstText(in: $0, xpaths: [XPathRules.contentCategory]) }
         let metadataText = [createdAtText, categoryText].compactMap(\.self).joined(separator: " · ").trimmedNonEmpty
@@ -363,7 +372,7 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             .text?
             .normalizedNonEmpty
             .flatMap(Self.firstInteger(in:))
-            ?? restrictedNotice.flatMap(Self.firstInteger(in:))
+            ?? restrictedNotice.flatMap(Self.requiredLevelFromNotice)
 
         let ownCommentIDs = ownCommentIDs(in: document)
         let commentSources = commentSources(in: document)
@@ -372,10 +381,10 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
                 item,
                 reactionConfiguration: reactionConfiguration,
                 ownCommentIDs: ownCommentIDs,
-                commentSources: commentSources
+                commentSources: commentSources,
+                restrictedNotice: restrictedNotice
             )
         }
-        let page = Self.postPage(from: url) ?? 1
         let pagination = parsePostDetailPagination(in: document, pageURL: url)
         let bodyReactionConfiguration = bodyItem.flatMap {
             reactionConfiguration?.commentConfiguration(for: $0)
@@ -386,8 +395,9 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             ?? bodyReactionConfiguration?.chickenLegCount
         let bodyOpposeCount = bodyItem.flatMap { parseReactionCount(in: $0, kind: .oppose) }
             ?? bodyReactionConfiguration?.opposeCount
-        let bodyFavoriteCount = bodyItem.flatMap { parseReactionCount(in: $0, kind: .favorite) }
-            ?? reactionConfiguration?.collectionCount
+        let bodyFavoriteCount = parseReactionCount(
+            in: bodyItem, kind: .favorite, configuredCount: reactionConfiguration?.collectionCount
+        )
         let isFavoriteCollected = bodyItem.map {
             hasRenderedReactionMenu(in: $0)
                 ? parseReactionClicked(in: $0, kind: .favorite)
@@ -407,6 +417,7 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             authorProfileURL: authorProfileURL,
             metadataText: metadataText,
             contentHTML: contentHTML,
+            visibleMarkdown: visibleMarkdown(in: bodyItem, sources: commentSources, pageRestricted: restrictedNotice != nil),
             signatureHTML: signatureHTML,
             likeCount: bodyLikeCount,
             isLikeClicked: bodyItem.map { parseReactionClicked(in: $0, kind: .like) } ?? false,
@@ -420,8 +431,31 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             comments: comments,
             page: page,
             pagination: pagination,
-            isLastPage: document.at_xpath(XPathRules.postDetailNextPage) == nil
+            isLastPage: pagination?.nextPage == nil && document.at_xpath(XPathRules.postDetailNextPage) == nil,
+            totalPages: postPageCount(in: document) ?? pagination?.items.map(\.page).max()
         )
+    }
+
+    private func postPageCount(in document: HTMLDocument) -> Int? {
+        for root in configRoots(in: document) {
+            guard let postData = root["postData"] as? [String: Any],
+                  let count = intValue(in: postData, keys: ["postPageCount"]),
+                  count > 0 else { continue }
+            return count
+        }
+        return nil
+    }
+
+    /// 后续页只有评论，楼主身份仍随帖子配置返回。
+    private func paginationOwner(in document: HTMLDocument) -> (name: String, profileURL: URL?)? {
+        for root in configRoots(in: document) {
+            guard let post = root["postData"] as? [String: Any], let op = post["op"] as? [String: Any],
+                  let name = stringValue(in: op, keys: ["name"]) else { continue }
+            let uid = intValue(in: op, keys: ["uid"])
+            let profileURL = uid.flatMap { $0 > 0 ? normalizeUserProfileURL("/space/\($0)") : nil }
+            return (name, profileURL)
+        }
+        return nil
     }
 
     /// 和网页“编辑”按钮同一判断：楼主 uid 等于当前登录用户；任意分页都有这两项。
@@ -467,12 +501,48 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
                 let time = comment["time"] as? [String: Any]
                 sources[String(commentID)] = CommentSource(
                     markdown: comment["markdown"] as? String,
+                    blocked: comment["blocked"] as? Bool,
+                    deleted: comment["deleted"] as? Bool == true,
                     editedAtText: (time?["editedDateFormated"] as? String)?.trimmedNonEmpty
                 )
             }
             return sources
         }
         return [:]
+    }
+
+    private func visibleMarkdown(in item: Kanna.XMLElement?, sources: [String: CommentSource], pageRestricted: Bool) -> String? {
+        guard !pageRestricted, let item, let id = item["data-comment-id"],
+              let source = sources[id], source.blocked == false, !source.deleted, let markdown = source.markdown,
+              let article = item.at_xpath(XPathRules.contentArticle), article.innerHTML?.trimmedNonEmpty != nil else { return nil }
+        let status = "contains(concat(' ', normalize-space(@class), ' '), ' blocked ') or contains(concat(' ', normalize-space(@class), ' '), ' deleted ') or contains(concat(' ', normalize-space(@class), ' '), ' restricted ')"
+        let text = article.text ?? ""
+        // 屏蔽、删除以原文数据的标记和网页结构为准；不按正文字样判断，作者写的「已删除」「权限不足」都是正文。
+        guard article.at_xpath("ancestor-or-self::*[\(status) or \(Self.hiddenElement)]") == nil,
+              article.at_xpath(".//*[\(status) or \(Self.hiddenElement)]") == nil else { return nil }
+        if let visible = text.normalizedNonEmpty, article.at_css("a, img, video, pre, table, strong, em, blockquote, ul, ol, del, s, code, br, h1, h2, h3, h4, h5, h6") == nil,
+           markdown.normalizedNonEmpty != visible {
+            return nil
+        }
+        // 原文与网页完全无关时，含链接或强调的状态提示也不能视作正文。
+        let leaves = article.xpath(".//*[not(*)]").compactMap { $0.text?.trimmedNonEmpty }
+        if !leaves.isEmpty, !leaves.contains(where: markdown.contains), !markdown.contains(":::: tabs"),
+           article.at_css("pre, img, video") == nil {
+            return nil
+        }
+        return markdown
+    }
+
+    private static let hiddenElement = "@hidden or @aria-hidden='true' or contains(translate(@style,'ABCDEFGHIJKLMNOPQRSTUVWXYZ ','abcdefghijklmnopqrstuvwxyz'),'display:none')"
+
+    private func visibleArticleHTML(in item: Kanna.XMLElement?) -> String? {
+        guard let article = item?.at_xpath(XPathRules.contentArticle),
+              article.at_xpath("ancestor-or-self::*[\(Self.hiddenElement)]") == nil else { return nil }
+        let hidden = ".//*[\(Self.hiddenElement) or self::script or self::style]"
+        guard article.at_xpath(hidden) != nil else { return article.innerHTML?.trimmedNonEmpty }
+        guard let copy = article.cloneNode(deep: true) else { return nil }
+        for element in copy.xpath(hidden).reversed() { element.parent?.removeChild(element) }
+        return copy.innerHTML?.trimmedNonEmpty
     }
 
     private func lowLevelWarningAuthorID(in document: HTMLDocument, bodyItem: Kanna.XMLElement?) -> Int? {
@@ -496,15 +566,8 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
     }
 
     private func postDetailContentHTML(bodyItem: Kanna.XMLElement?, document: HTMLDocument) -> String {
-        if let contentHTML = bodyItem?.at_xpath(XPathRules.contentArticle)?.innerHTML?.trimmedNonEmpty {
-            return contentHTML
-        }
-
-        if let notice = postDetailRestrictedNotice(in: document) {
-            return notice
-        }
-
-        return ""
+        if let notice = postDetailRestrictedNotice(in: document) { return notice }
+        return visibleArticleHTML(in: bodyItem) ?? ""
     }
 
     private func contentSignatureHTML(in item: Kanna.XMLElement?) -> String? {
@@ -517,6 +580,20 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
         }
 
         return postDetailEmptyStateNotice(in: document)
+    }
+
+    private static func unavailablePostTitle(_ notice: String) -> String {
+        if notice.range(of: #"(?i)^404\s+not\s+found\b"#, options: .regularExpression) != nil {
+            return NSLocalizedString("帖子不存在", tableName: "DetailPrototype", comment: "站点返回帖子不存在提示")
+        }
+        return "受限帖子"
+    }
+
+    private static func requiredLevelFromNotice(_ notice: String) -> Int? {
+        // 提示还可能含状态码、等待时间和用户自己的等级，只取阅读要求后的等级。
+        let pattern = #"(?i)(?:需要|要求)\s*(?:达到\s*)?(?:lv\.?\s*|等级\s*)([0-9]+)"#
+        guard let range = notice.range(of: pattern, options: .regularExpression) else { return nil }
+        return firstInteger(in: String(notice[range]))
     }
 
     private func postDetailEmptyStateNotice(in document: HTMLDocument) -> String? {
@@ -635,11 +712,12 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
         let currentPage = items.first(where: \.isCurrent)?.page ?? currentPageFromURL
         let previousPage = Self.postPage(from: pager.at_xpath(XPathRules.pagerPrevious)?["href"], relativeTo: baseURL)
         let nextPage = Self.postPage(from: pager.at_xpath(XPathRules.pagerNext)?["href"], relativeTo: baseURL)
+        let numberedNextPage = items.contains { $0.page > currentPage } ? currentPage + 1 : nil
         let pagination = PostDetailPagination(
             currentPage: currentPage,
             items: items,
             previousPage: previousPage,
-            nextPage: nextPage
+            nextPage: nextPage ?? numberedNextPage
         )
         return pagination.hasMultiplePages ? pagination : nil
     }
@@ -648,7 +726,8 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
         _ item: Kanna.XMLElement,
         reactionConfiguration: PostReactionConfiguration?,
         ownCommentIDs: Set<String> = [],
-        commentSources: [String: CommentSource] = [:]
+        commentSources: [String: CommentSource] = [:],
+        restrictedNotice: String? = nil
     ) -> Comment? {
         guard let authorName = firstText(in: item, xpaths: [XPathRules.contentAuthor]) else {
             return nil
@@ -671,6 +750,11 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
         let opposeCount = parseReactionCount(in: item, kind: .oppose)
             ?? commentReactionConfiguration?.opposeCount
 
+        let source = commentSources[id]
+        let visibleSource = visibleMarkdown(in: item, sources: commentSources, pageRestricted: restrictedNotice != nil)
+        // 引用按网页逻辑取原文，只排除屏蔽、删除和受限页；正文能否原生渲染不影响引用。
+        let quoteMarkdown = restrictedNotice == nil && source?.blocked != true && source?.deleted != true ? source?.markdown : visibleSource
+
         return Comment(
             id: id,
             anchorID: item["id"]?.trimmedNonEmpty,
@@ -686,7 +770,7 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
                 xpaths: [XPathRules.contentCreatedAt],
                 attribute: "title"
             ),
-            contentHTML: item.at_xpath(XPathRules.contentArticle)?.innerHTML?.trimmedNonEmpty ?? "",
+            contentHTML: restrictedNotice ?? visibleArticleHTML(in: item) ?? "",
             signatureHTML: contentSignatureHTML(in: item),
             isHot: item.at_xpath(XPathRules.contentHotBadge) != nil,
             likeCount: likeCount,
@@ -696,7 +780,8 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
             opposeCount: opposeCount,
             isOpposeClicked: parseReactionClicked(in: item, kind: .oppose),
             isOwnComment: ownCommentIDs.contains(id),
-            markdown: commentSources[id]?.markdown,
+            markdown: quoteMarkdown,
+            hasVisibleMarkdown: visibleSource != nil,
             editedAtTitleText: commentSources[id]?.editedAtText
         )
     }
@@ -761,16 +846,25 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
         }
     }
 
-    private func parseReactionCount(in item: Kanna.XMLElement, kind: ReactionKind) -> Int? {
+    // 正文和签名是用户内容；其中的链接、数字不能作为帖子操作栏的数据。
+    private static let outsidePostText = "[not(ancestor-or-self::*[contains(concat(' ', normalize-space(@class), ' '), ' post-content ') or contains(concat(' ', normalize-space(@class), ' '), ' signature ')])]"
+
+    private func parseReactionCount(in item: Kanna.XMLElement?, kind: ReactionKind, configuredCount: Int? = nil) -> Int? {
+        guard let item else { return configuredCount }
         if let count = parseRenderedReactionMenuCount(in: item, kind: kind) {
             return count
         }
 
-        if let count = firstInteger(inAttributesOf: item, attributes: kind.rootAttributes) {
+        if let count = firstInteger(inAttributesOf: item, attributes: kind.rootAttributes) ?? configuredCount {
             return count
         }
 
-        for node in item.xpath(".//*") where node.matchesReaction(kind) {
+        // 当前页面先输出空菜单，稍后才挂载按钮。此时计数来自配置，作者名和编辑时间也可能含“收藏”等字样。
+        if item.at_xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' comment-menu-mount ') or contains(concat(' ', normalize-space(@class), ' '), ' comment-menu ')]" + Self.outsidePostText) != nil {
+            return nil
+        }
+
+        for node in item.xpath(".//*" + Self.outsidePostText) where node.matchesReaction(kind) {
             if let count = firstInteger(inAttributesOf: node, attributes: kind.countAttributes) {
                 return count
             }
@@ -786,9 +880,12 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
                 return count
             }
 
-            if let siblingText = node.at_xpath("./following-sibling::*[1]")?.text,
-               let count = Self.firstInteger(in: siblingText) {
-                return count
+            if let siblingText = node.at_xpath("./following-sibling::*[1]" + Self.outsidePostText)?.text {
+                // 旧版收藏按钮旁可能是时间；只有独立数字才是相邻计数。
+                let count = kind == .favorite
+                    ? Int(siblingText.trimmingCharacters(in: .whitespacesAndNewlines))
+                    : Self.firstInteger(in: siblingText)
+                if let count { return count }
             }
         }
 
@@ -796,7 +893,7 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
     }
 
     private func parseRenderedReactionMenuCount(in item: Kanna.XMLElement, kind: ReactionKind) -> Int? {
-        for node in item.xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' comment-menu ')]//*[contains(concat(' ', normalize-space(@class), ' '), ' menu-item ')]") where node.matchesReaction(kind) {
+        for node in item.xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' comment-menu ')]//*[contains(concat(' ', normalize-space(@class), ' '), ' menu-item ')]" + Self.outsidePostText) where node.matchesReaction(kind) {
             if let countText = node.at_xpath(".//span[normalize-space()][1]")?.text,
                let count = Self.firstInteger(in: countText) {
                 return count
@@ -811,13 +908,13 @@ nonisolated struct KannaNodeSeekParser: NodeSeekParser {
     }
 
     private func parseReactionClicked(in item: Kanna.XMLElement, kind: ReactionKind) -> Bool {
-        item.xpath(".//*").contains { node in
-            node.matchesReaction(kind) && node.hasClass("clicked")
+        item.xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' clicked ')]" + Self.outsidePostText).contains { node in
+            node.matchesReaction(kind)
         }
     }
 
     private func hasRenderedReactionMenu(in item: Kanna.XMLElement) -> Bool {
-        item.at_xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' comment-menu ')]") != nil
+        item.at_xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' comment-menu ')]" + Self.outsidePostText) != nil
     }
 
     private struct PostReactionConfiguration {
@@ -1051,16 +1148,11 @@ nonisolated private extension Kanna.XMLElement {
         guard haystack.isEmpty == false else { return false }
         return kind.markers.contains { haystack.contains($0.lowercased()) }
     }
-
-    func hasClass(_ className: String) -> Bool {
-        guard let value = self["class"] else { return false }
-        return value
-            .split(whereSeparator: { $0.isWhitespace })
-            .contains { $0 == className }
-    }
 }
 
 nonisolated private struct CommentSource {
     let markdown: String?
+    let blocked: Bool?
+    let deleted: Bool
     let editedAtText: String?
 }
