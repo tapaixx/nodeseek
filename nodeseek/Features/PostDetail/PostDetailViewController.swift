@@ -740,7 +740,12 @@ class PostDetailViewController: UIViewController {
         )
         moreButton?.accessibilityLabel = "更多"
 
-        navigationItem.rightBarButtonItem = moreButton
+        let assistant = UIBarButtonItem(image: UIImage(systemName: "sparkles"), primaryAction: UIAction { [weak self] _ in
+            self?.openPostAssistant()
+        })
+        assistant.accessibilityIdentifier = "post-detail-ai-assistant"
+        assistant.accessibilityLabel = ChatAssistantText.text("title")
+        navigationItem.rightBarButtonItems = [moreButton, assistant].compactMap { $0 }
         updateVerticalReplyBarItem(visible: false)
     }
 

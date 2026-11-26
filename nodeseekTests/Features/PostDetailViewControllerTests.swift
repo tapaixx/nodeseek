@@ -948,7 +948,9 @@ struct PostDetailViewControllerTests {
         viewController.loadViewIfNeeded()
 
         let items = try #require(viewController.navigationItem.rightBarButtonItems)
-        #expect(items.count == 1)
+        #expect(items.count == 2)
+        let assistant = try #require(items.first { $0.accessibilityIdentifier == "post-detail-ai-assistant" })
+        #expect(assistant.accessibilityLabel == ChatAssistantText.text("title"))
         let moreButton = try #require(items.first { $0.accessibilityLabel == "更多" })
         _ = try #require(moreButton.menu?.children.first { $0.title == "刷新" } as? UIAction)
         _ = try #require(moreButton.menu?.children.first { $0.title == "复制链接" } as? UIAction)

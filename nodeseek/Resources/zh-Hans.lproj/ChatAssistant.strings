@@ -1,4 +1,9 @@
 "title" = "AI 助手";
+"postSummary" = "总结帖子";
+"postPrivacy" = "仅在设备上处理已加载的帖子正文和评论节选。发表前请核对建议。";
+"postExternalPrivacy" = "已加载的帖子正文和评论节选将由所选服务处理。发表前请核对建议。";
+"postExternalConfirmBody" = "将把本帖正文和已加载评论的节选发送到 %@，内容处理遵循该服务的隐私政策。";
+"postEmpty" = "请先加载可阅读的帖子，再使用助手。";
 "task" = "选择任务";
 "summary" = "总结聊天";
 "analysis" = "分析要点";

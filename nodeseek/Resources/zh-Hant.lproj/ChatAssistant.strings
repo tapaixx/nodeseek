@@ -1,4 +1,9 @@
 "title" = "AI 助手";
+"postSummary" = "摘要文章";
+"postPrivacy" = "僅在裝置上處理已載入的文章正文和留言節選。發表前請確認建議。";
+"postExternalPrivacy" = "已載入的文章正文和留言節選將由所選服務處理。發表前請確認建議。";
+"postExternalConfirmBody" = "將把本文正文和已載入留言的節選傳送到 %@，內容處理遵循該服務的隱私權政策。";
+"postEmpty" = "請先載入可閱讀的文章，再使用助手。";
 "task" = "選擇任務";
 "summary" = "摘要聊天";
 "analysis" = "分析重點";

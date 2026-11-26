@@ -16,6 +16,8 @@
 
 ## 验证
 
+帖子详情右上角的「✨ AI 助手」复用同一套模型配置。助手读取当前可见的主楼和已加载评论节选，不会为分析自动翻页；回复建议追加到原生评论草稿，由用户自行编辑并发布。
+
 ```sh
 make spm-test
 make xcode-test-class TEST="MessageConversationTests NotificationViewControllerTests" SIMULATOR_ID=<设备编号>

@@ -3,6 +3,13 @@ import XCTest
 
 @MainActor
 final class ChatAssistantTests: XCTestCase {
+    func testPostContextKeepsMainTextAndExcludesHiddenHTML() {
+        let header = PostDetailHeaderContent(postID: "1", title: "主题", authorName: "示例", avatarURL: nil, metadataText: nil,
+                                            contentHTML: "<p>正文 &amp; 说明</p><script>internalScript</script><p hidden>hidden text</p>")
+        let messages = PostAssistantContext.messages(header: header, comments: [])
+        XCTAssertEqual(messages.first?.speaker, "post")
+        XCTAssertEqual(messages.first?.text, "主题\n\n正文 & 说明")
+    }
     func testAPIConfigurationNormalizesAddressesAndRejectsUnsafeURLs() throws {
         for address in ["https://example.com", "https://example.com/v1/", "https://example.com/v1/chat/completions"] {
             XCTAssertEqual(ChatAssistantAPIConfiguration(address: address, model: "chat-model", key: "")?.endpoint.absoluteString,

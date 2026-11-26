@@ -1,4 +1,9 @@
 "title" = "AI Assistant";
+"postSummary" = "Summarize thread";
+"postPrivacy" = "The assistant processes excerpts from the loaded post and comments on this device. Review suggestions before posting.";
+"postExternalPrivacy" = "The selected service processes excerpts from the loaded post and comments. Review suggestions before posting.";
+"postExternalConfirmBody" = "Excerpts from this post and its loaded comments will be sent to %@. The provider’s privacy policy applies.";
+"postEmpty" = "Load a readable post before using the assistant.";
 "task" = "Task";
 "summary" = "Summarize chat";
 "analysis" = "Analyze key points";
