@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 
 @MainActor
 final class MessageConversationViewController: UIViewController, UITableViewDataSource, UITextViewDelegate {
@@ -183,11 +184,31 @@ final class MessageConversationViewController: UIViewController, UITableViewData
         let more = UIButton(type: .system)
         more.setImage(UIImage(systemName: "ellipsis.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 22)), for: .normal)
         more.tintColor = .label
-        more.menu = UIMenu(children: [profile, browser])
+        let assistant = UIAction(title: ChatAssistantText.text("title"), image: UIImage(systemName: "sparkles")) { [weak self] _ in
+            self?.openAssistant()
+        }
+        more.menu = UIMenu(children: [assistant, profile, browser])
         more.showsMenuAsPrimaryAction = true
         more.accessibilityLabel = "聊天更多操作"
         NSLayoutConstraint.activate([more.widthAnchor.constraint(equalToConstant: 44), more.heightAnchor.constraint(equalToConstant: 44)])
         navigationItem.rightBarButtonItem = UIBarButtonItem(customView: more)
+    }
+
+    private func openAssistant() {
+        guard presentedViewController == nil, input.markedTextRange == nil else { return }
+        let userID = model.currentUserID
+        let context = ChatAssistantMessage.context(model.messages.map { message in
+            ChatAssistantMessage(speaker: message.senderID == userID ? "me" : "peer", text: message.content)
+        })
+        input.resignFirstResponder()
+        let assistant = ChatAssistantView(messages: context, canDraft: model.hasLoaded) { [weak self] suggestion in
+            guard let self, model.hasLoaded, model.currentUserID == userID, !model.isSending,
+                  !model.deliveryUncertain, input.markedTextRange == nil else { return false }
+            model.draft = ChatAssistantContext.appending(suggestion, to: model.draft)
+            render()
+            return true
+        }
+        present(UIHostingController(rootView: assistant), animated: true)
     }
 
     override func viewDidLayoutSubviews() {

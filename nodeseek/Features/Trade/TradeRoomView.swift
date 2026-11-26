@@ -282,6 +282,7 @@ struct TradeRoomView: View {
     @State private var messageOperation: TradeOperation?
     @State private var history: TradeValue?
     @State private var imagePicker = false
+    @State private var assistantContext: ChatAssistantContext?
 
     private var shownMessages: [TradeMessage] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -357,6 +358,16 @@ struct TradeRoomView: View {
                         }
                     }
                     Section(TradeText.text("交易群聊")) {
+                        Button {
+                            composerFocused = false
+                            let context = ChatAssistantMessage.context(model.messages.compactMap { message in
+                                guard message.type == "text", message.hidden != true, message.deleted != true,
+                                      message.visibleTo?.isEmpty != false, let text = message.content else { return nil }
+                                let speaker = (message.sender?.id).map { $0 == model.currentUser?.id ? "me" : "participant-\($0)" } ?? "participant"
+                                return ChatAssistantMessage(speaker: speaker, text: text)
+                            })
+                            assistantContext = ChatAssistantContext(messages: context, canDraft: model.room?.access.canWrite == true && model.currentUser != nil)
+                        } label: { Label(ChatAssistantText.text("title"), systemImage: "sparkles").frame(minHeight: 44) }
                         if model.hasMore {
                             Button(TradeText.text("加载更早的消息")) {
                                 let anchor = shownMessages.first?.id
@@ -453,6 +464,13 @@ struct TradeRoomView: View {
             if let history { TradeMessageHistory(data: history) }
         }
         .sheet(isPresented: $imagePicker) { TradeImagePicker { model.selectAttachment($0) } }
+        .sheet(item: $assistantContext) { context in
+            ChatAssistantView(messages: context.messages, canDraft: context.canDraft) { suggestion in
+                guard model.room?.access.canWrite == true, !model.isSending, !model.sendNeedsReview else { return false }
+                model.draft = ChatAssistantContext.appending(suggestion, to: model.draft)
+                return true
+            }
+        }
         .sheet(isPresented: $editingTerms) {
             if let room = model.room { TradeTermsView(model: model, room: room).tradeTypography() }
         }
