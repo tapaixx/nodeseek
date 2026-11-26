@@ -61,10 +61,25 @@ struct ChatAssistantView: View {
     @State private var result: String?
     @State private var error: String?
     @State private var task: Task<Void, Never>?
-    @State private var api = ChatAssistantAPIStore.load()
-    @State private var customAPI = false
+    @State private var api: ChatAssistantAPIConfiguration?
+    @State private var customAPI: Bool
     @State private var configuring = false
     @State private var confirmingExternalRequest = false
+
+    init(messages: [ChatAssistantMessage], canDraft: Bool, isPost: Bool = false,
+         configuration: ChatAssistantAPIConfiguration? = ChatAssistantAPIStore.load(),
+         useDraft: @escaping (String) -> Bool) {
+        self.messages = messages
+        self.canDraft = canDraft
+        self.isPost = isPost
+        self.useDraft = useDraft
+        _api = State(initialValue: configuration)
+        _customAPI = State(initialValue: configuration != nil)
+    }
+
+    private var canGenerate: Bool {
+        task == nil && !messages.isEmpty && (customAPI ? api != nil : available)
+    }
 
     private var available: Bool {
         #if canImport(FoundationModels)
@@ -76,36 +91,34 @@ struct ChatAssistantView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section {
-                    Picker(ChatAssistantText.text("provider"), selection: $customAPI) {
-                        Text(ChatAssistantText.text("onDevice")).tag(false)
-                        Text(ChatAssistantText.text("customAPI")).tag(true)
-                    }.disabled(task != nil)
-                    Button(ChatAssistantText.text("configureAPI")) { configuring = true }.disabled(task != nil)
-                    if customAPI, let api {
-                        Text(api.endpoint.absoluteString).font(.footnote).foregroundStyle(.secondary)
-                        Text(api.model).font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Text(ChatAssistantText.text(isPost ? (customAPI ? "postExternalPrivacy" : "postPrivacy") : (customAPI ? "externalPrivacy" : "privacy"))).foregroundStyle(.secondary)
-                }
-                Picker(ChatAssistantText.text("task"), selection: $mode) {
+                Section(ChatAssistantText.text("task")) {
+                    Text(ChatAssistantText.text(isPost ? "postScope" : "chatScope"))
+                        .font(.footnote).foregroundStyle(.secondary)
                     ForEach(canDraft ? ChatAssistantMode.allCases : [.summary, .analysis], id: \.self) { option in
-                        Text(ChatAssistantText.text(isPost && option == .summary ? "postSummary" : option.rawValue)).tag(option)
+                        Button {
+                            mode = option
+                            result = nil
+                            error = nil
+                            if customAPI { confirmingExternalRequest = true }
+                            else { generate() }
+                        } label: {
+                            Label(ChatAssistantText.text(isPost && option == .summary ? "postSummary" : option.rawValue),
+                                  systemImage: option == .summary ? "doc.text" : option == .analysis ? "text.magnifyingglass" : "square.and.pencil")
+                                .frame(minHeight: 44)
+                        }
+                        .accessibilityIdentifier("ai-action-\(option.rawValue)")
+                        .disabled(!canGenerate)
                     }
-                }.disabled(task != nil)
-                if customAPI && api == nil {
-                    Text(ChatAssistantText.text("apiMissing")).foregroundStyle(.secondary)
-                } else if !customAPI && !available {
-                    Text(ChatAssistantText.text("unavailable")).foregroundStyle(.secondary)
-                } else if messages.isEmpty {
-                    Text(ChatAssistantText.text(isPost ? "postEmpty" : "empty")).foregroundStyle(.secondary)
-                } else if task != nil {
-                    ProgressView(ChatAssistantText.text("working"))
-                } else {
-                    Button(ChatAssistantText.text("generate")) {
-                        if customAPI { confirmingExternalRequest = true }
-                        else { generate() }
-                    }.frame(minHeight: 44)
+                    if task != nil {
+                        ProgressView(ChatAssistantText.text("working"))
+                    } else if messages.isEmpty {
+                        Text(ChatAssistantText.text(isPost ? "postEmpty" : "empty")).foregroundStyle(.secondary)
+                    } else if customAPI && api == nil {
+                        Text(ChatAssistantText.text("apiMissing")).foregroundStyle(.secondary)
+                    } else if !customAPI && !available {
+                        Text(ChatAssistantText.text("unavailable")).foregroundStyle(.secondary)
+                        Button(ChatAssistantText.text("useCustomAPI")) { customAPI = true; configuring = true }
+                    }
                 }
                 if let error { Text(error).foregroundStyle(.secondary) }
                 if let result {
@@ -120,6 +133,18 @@ struct ChatAssistantView: View {
                         }
                     }
                 }
+                Section {
+                    Picker(ChatAssistantText.text("provider"), selection: $customAPI) {
+                        Text(ChatAssistantText.text("onDevice")).tag(false)
+                        Text(ChatAssistantText.text("customAPI")).tag(true)
+                    }.disabled(task != nil)
+                    Button(ChatAssistantText.text("configureAPI")) { configuring = true }.disabled(task != nil)
+                    if customAPI, let api {
+                        Text(api.endpoint.absoluteString).font(.footnote).foregroundStyle(.secondary)
+                        Text(api.model).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Text(ChatAssistantText.text(isPost ? (customAPI ? "postExternalPrivacy" : "postPrivacy") : (customAPI ? "externalPrivacy" : "privacy"))).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle(ChatAssistantText.text("title"))
             .navigationBarTitleDisplayMode(.inline)
@@ -128,7 +153,6 @@ struct ChatAssistantView: View {
                     Button(ChatAssistantText.text("close")) { dismiss() }
                 }
             }
-            .onChange(of: mode) { _ in result = nil; error = nil }
             .onChange(of: customAPI) { _ in result = nil; error = nil }
             .onDisappear { task?.cancel(); task = nil }
             .sheet(isPresented: $configuring) {

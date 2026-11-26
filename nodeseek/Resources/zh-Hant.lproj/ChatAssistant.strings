@@ -5,6 +5,9 @@
 "postExternalConfirmBody" = "將把本文正文和已載入留言的節選傳送到 %@，內容處理遵循該服務的隱私權政策。";
 "postEmpty" = "請先載入可閱讀的文章，再使用助手。";
 "task" = "選擇任務";
+"postScope" = "直接選擇下方操作，處理本文正文和已載入的留言。";
+"chatScope" = "直接選擇下方操作，處理已載入的對話。";
+"useCustomAPI" = "改用自訂 API";
 "summary" = "摘要聊天";
 "analysis" = "分析重點";
 "reply" = "建議回覆";

@@ -18,6 +18,8 @@
 
 帖子详情右上角的「✨ AI 助手」复用同一套模型配置。助手读取当前可见的主楼和已加载评论节选，不会为分析自动翻页；回复建议追加到原生评论草稿，由用户自行编辑并发布。
 
+助手打开后直接显示总结、分析和建议回复三个操作，点击后开始对应任务；已有自定义 API 配置时默认使用该配置。未就绪的设备端模型不再隐藏操作入口，会提示配置自定义 API。
+
 ```sh
 make spm-test
 make xcode-test-class TEST="MessageConversationTests NotificationViewControllerTests" SIMULATOR_ID=<设备编号>

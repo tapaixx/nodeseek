@@ -1,8 +1,47 @@
 import XCTest
+import SwiftUI
 @testable import nodeseek
 
 @MainActor
 final class ChatAssistantTests: XCTestCase {
+    func testPostAssistantActionsLayoutWithSavedAPI() async throws {
+        let configuration = try XCTUnwrap(ChatAssistantAPIConfiguration(address: "https://example.com/v1", model: "test-model", key: ""))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first { $0.isKeyWindow }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("post-assistant-actions")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, style, size) in [("light", UIUserInterfaceStyle.light, UIContentSizeCategory.large),
+                                    ("dark-large", .dark, .accessibilityExtraExtraExtraLarge)] {
+            let view = ChatAssistantView(messages: [.init(speaker: "post", text: "虚构测试帖子")], canDraft: true,
+                                         isPost: true, configuration: configuration) { _ in
+                XCTFail("Rendering must not apply a reply")
+                return false
+            }
+            let controller = UIHostingController(rootView: view)
+            controller.overrideUserInterfaceStyle = style
+            let parent = UIViewController()
+            parent.addChild(controller)
+            parent.view.addSubview(controller.view)
+            controller.didMove(toParent: parent)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+            window.rootViewController = parent
+            controller.view.frame = window.bounds
+            controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            parent.setOverrideTraitCollection(UITraitCollection(preferredContentSizeCategory: size), forChild: controller)
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; previousWindow?.makeKey() }
+            try await Task.sleep(nanoseconds: 650_000_000)
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in window.layer.render(in: context.cgContext) }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "post-assistant-" + name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            try XCTUnwrap(image.pngData()).write(to: directory.appendingPathComponent(name + ".png"))
+        }
+    }
+
     func testPostContextKeepsMainTextAndExcludesHiddenHTML() {
         let header = PostDetailHeaderContent(postID: "1", title: "主题", authorName: "示例", avatarURL: nil, metadataText: nil,
                                             contentHTML: "<p>正文 &amp; 说明</p><script>internalScript</script><p hidden>hidden text</p>")

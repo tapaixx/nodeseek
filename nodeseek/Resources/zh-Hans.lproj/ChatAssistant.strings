@@ -5,6 +5,9 @@
 "postExternalConfirmBody" = "将把本帖正文和已加载评论的节选发送到 %@，内容处理遵循该服务的隐私政策。";
 "postEmpty" = "请先加载可阅读的帖子，再使用助手。";
 "task" = "选择任务";
+"postScope" = "直接选择下方操作，处理本帖正文和已加载的评论。";
+"chatScope" = "直接选择下方操作，处理已加载的对话。";
+"useCustomAPI" = "改用自定义 API";
 "summary" = "总结聊天";
 "analysis" = "分析要点";
 "reply" = "建议回复";

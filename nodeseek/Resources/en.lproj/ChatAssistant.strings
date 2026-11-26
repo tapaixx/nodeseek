@@ -5,6 +5,9 @@
 "postExternalConfirmBody" = "Excerpts from this post and its loaded comments will be sent to %@. The provider’s privacy policy applies.";
 "postEmpty" = "Load a readable post before using the assistant.";
 "task" = "Task";
+"postScope" = "Choose an action for this post and its loaded comments.";
+"chatScope" = "Choose an action for the loaded conversation.";
+"useCustomAPI" = "Set up a custom API instead";
 "summary" = "Summarize chat";
 "analysis" = "Analyze key points";
 "reply" = "Suggest a reply";
