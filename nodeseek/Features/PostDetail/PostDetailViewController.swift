@@ -655,10 +655,16 @@ class PostDetailViewController: UIViewController {
         presenter.viewDidLoad()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        syncPostContextToAssistant()
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         loginCheckTask?.cancel()
         loginCheckTask = nil
+        clearPostContextFromAssistant()
     }
 
     override func viewSafeAreaInsetsDidChange() {

@@ -156,6 +156,7 @@ extension PostDetailViewController: PostDetailViewProtocol {
         }
         consumeInitialAnchorIfNeeded()
         if authorFilter != nil { scheduleAuthorFilterAutoLoadIfNeeded(newMatchCount: authorFilterMatchedCount) }
+        syncPostContextToAssistant()
     }
 
     func appendCommentPage(detail: PostDetail) {
@@ -178,6 +179,7 @@ extension PostDetailViewController: PostDetailViewProtocol {
         updateLoadMoreCommentsFooter()
         updateReplyButtonVisibility()
         if let authorFilter { scheduleAuthorFilterAutoLoadIfNeeded(newMatchCount: detail.comments.filter(authorFilter.matches).count) }
+        syncPostContextToAssistant()
     }
 
     func refreshCurrentCommentPage(detail: PostDetail) {
@@ -218,6 +220,7 @@ extension PostDetailViewController: PostDetailViewProtocol {
         collectionList.headerSource = .init(post: detail)
         configureHeader(PostDetailHeaderContent(detail: detail))
         collectionList.refreshHeader()
+        syncPostContextToAssistant()
     }
 
     func updateCommentLike(commentID: String, count: Int?, isClicked: Bool) {

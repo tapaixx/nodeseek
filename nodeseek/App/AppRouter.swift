@@ -81,6 +81,7 @@ final class AppRouter {
                 },
                 completion: { _ in
                     Task { @MainActor in
+                        FloatingAssistantOverlayManager.shared.bringToFrontIfNeeded()
                         completion?(newRoot)
                     }
                 }

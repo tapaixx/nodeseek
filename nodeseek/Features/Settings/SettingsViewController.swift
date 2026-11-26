@@ -132,6 +132,7 @@ class SettingsViewController: UITableViewController {
         case specialFollow
         case autoCheckIn
         case siteVerification
+        case floatingAssistant
     }
 
     private enum NotificationRow: Int, CaseIterable {
@@ -422,6 +423,8 @@ class SettingsViewController: UITableViewController {
 
     private func featureCell(for indexPath: IndexPath) -> UITableViewCell {
         switch FeatureRow(rawValue: indexPath.row) {
+        case .floatingAssistant:
+            return floatingAssistantCell()
         case .nodeImage:
             return nodeImageAuthorizationCell(for: indexPath)
         case .specialFollow:
@@ -757,6 +760,8 @@ class SettingsViewController: UITableViewController {
 
     private func handleFeatureSelection(at indexPath: IndexPath) {
         switch FeatureRow(rawValue: indexPath.row) {
+        case .floatingAssistant:
+            break
         case .nodeImage:
             handleNodeImageAuthorizationSelection()
         case .specialFollow:
@@ -917,6 +922,28 @@ class SettingsViewController: UITableViewController {
 
     @objc private func homeSearchEntrySwitchChanged(_ sender: UISwitch) {
         searchEntrySettings.setShowsTopSearchEntry(sender.isOn)
+    }
+
+    private func floatingAssistantCell() -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.textLabel?.textColor = ReadingColors.text
+        cell.textLabel?.text = ChatAssistantText.text("floatingAssistantSettingTitle")
+        cell.detailTextLabel?.text = ChatAssistantText.text("floatingAssistantSettingSubtitle")
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.detailTextLabel?.numberOfLines = 0
+        cell.imageView?.image = UIImage(systemName: "sparkles")
+        let toggle = UISwitch()
+        toggle.isOn = FloatingAssistantSettings.shared.isFloatingOrbEnabled
+        toggle.accessibilityIdentifier = "settings-floating-assistant-switch"
+        toggle.addTarget(self, action: #selector(floatingAssistantSwitchChanged(_:)), for: .valueChanged)
+        cell.accessoryView = toggle
+        cell.selectionStyle = .none
+        cell.accessibilityIdentifier = "settings-floating-assistant-cell"
+        return cell
+    }
+
+    @objc private func floatingAssistantSwitchChanged(_ sender: UISwitch) {
+        FloatingAssistantSettings.shared.isFloatingOrbEnabled = sender.isOn
     }
 
     @objc private func specialFollowKeywordsDidChange(_ notification: Notification) {

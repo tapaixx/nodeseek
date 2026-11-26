@@ -93,4 +93,146 @@ final class ChatAssistantTests: XCTestCase {
         XCTAssertEqual(ChatAssistantContext.appending("建议", to: "已有草稿"), "已有草稿\n\n建议")
         XCTAssertEqual(ChatAssistantContext.appending("建议", to: " \n"), "建议")
     }
+
+    func testSSEDeltaExtractionAndPayloadParsing() {
+        let payload = """
+        : keep-alive
+
+        data: {"choices":[{"delta":{"content":"你好"}}]}
+
+        data: {"choices":[{"delta":{"content":"，NodeSeek"}}]}
+
+        data: [DONE]
+        """
+        XCTAssertEqual(ChatAssistantAPI.parseSSEPayload(payload), "你好，NodeSeek")
+        XCTAssertEqual(ChatAssistantAPI.extractSSEDelta(from: "data: [DONE]"), "[DONE]")
+        XCTAssertNil(ChatAssistantAPI.extractSSEDelta(from: "event: ping"))
+    }
+
+    func testCrossPostPromptBuilderIncludesPreviousAndCurrentPosts() {
+        let postA = AssistantContextSnapshot(
+            id: "post-101",
+            kind: .post,
+            postID: "101",
+            title: "美西 CN2 GIA 测评",
+            subtitle: "@alice",
+            messages: [.init(speaker: "post", text: "年付 49 美元，三网回程 CN2 GIA")],
+            capturedAt: Date()
+        )
+        let postB = AssistantContextSnapshot(
+            id: "post-202",
+            kind: .post,
+            postID: "202",
+            title: "日本软银 2C4G 出售",
+            subtitle: "@bob",
+            messages: [.init(speaker: "post", text: "年付 35 美元，晚高峰偶尔抖动")],
+            capturedAt: Date()
+        )
+        let session = AssistantSession(
+            turns: [
+                AssistantChatTurn(role: .user, content: "帮我记住第一个机器"),
+                AssistantChatTurn(role: .assistant, content: "好的，已记住美西 CN2 GIA。")
+            ],
+            referencedContexts: [postA]
+        )
+
+        let built = AssistantPromptBuilder.buildMessages(
+            session: session,
+            activeContext: postB,
+            userPrompt: "这两个哪个更值？"
+        )
+        XCTAssertEqual(built.first?.role, "system")
+        let systemPrompt = built.first?.content ?? ""
+        XCTAssertTrue(systemPrompt.contains("美西 CN2 GIA 测评"))
+        XCTAssertTrue(systemPrompt.contains("日本软银 2C4G 出售"))
+        XCTAssertTrue(systemPrompt.contains("[CURRENTLY VIEWING]"))
+        XCTAssertEqual(built.count, 4) // system + 2 history turns + new user turn
+        XCTAssertTrue(built.last?.content.contains("这两个哪个更值？") == true)
+    }
+
+    func testSessionStorePersistsCrossPostConversationAcrossRestarts() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("assistant-store-test-\(UUID().uuidString)", isDirectory: true)
+        let storageURL = tempDir.appendingPathComponent("sessions.json")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let defaultsSuite = "assistant-test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let settings = FloatingAssistantSettings(userDefaults: defaults)
+        XCTAssertTrue(settings.isFloatingOrbEnabled)
+
+        let config = try XCTUnwrap(ChatAssistantAPIConfiguration(address: "https://example.com/v1", model: "gpt-test", key: "k"))
+        let store = AssistantSessionStore(storageURL: storageURL, settings: settings, configuration: config)
+
+        store.updateCurrentPostContext(
+            postID: "1",
+            title: "帖子 A",
+            authorName: "authorA",
+            commentCount: 2,
+            messages: [.init(speaker: "post", text: "帖子 A 正文")],
+            draftHandler: nil
+        )
+
+        let mockTransport: (URLRequest) async throws -> (Data, URLResponse) = { request in
+            let response = try XCTUnwrap(HTTPURLResponse(url: config.endpoint, statusCode: 200, httpVersion: nil, headerFields: nil))
+            return (Data(#"{"choices":[{"message":{"role":"assistant","content":"已收到并分析"}}]}"#.utf8), response)
+        }
+
+        store.sendMessage("总结帖子 A", transport: mockTransport)
+        while store.isGenerating {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        // 切换到帖子 B 并继续在同一会话中提问
+        store.updateCurrentPostContext(
+            postID: "2",
+            title: "帖子 B",
+            authorName: "authorB",
+            commentCount: 5,
+            messages: [.init(speaker: "post", text: "帖子 B 正文")],
+            draftHandler: nil
+        )
+        store.sendMessage("对比帖子 A 和帖子 B", transport: mockTransport)
+        while store.isGenerating {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        XCTAssertEqual(store.activeSession.turns.count, 4)
+        XCTAssertEqual(store.activeSession.referencedContexts.map(\.postID), ["1", "2"])
+
+        // 模拟重启 App，重新从磁盘加载
+        let reloaded = AssistantSessionStore(storageURL: storageURL, settings: settings, configuration: config)
+        XCTAssertEqual(reloaded.activeSession.turns.count, 4)
+        XCTAssertEqual(reloaded.activeSession.referencedContexts.map(\.postID), ["1", "2"])
+    }
+
+    func testCancelledGenerationDoesNotClearReplacementRequestState() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = try XCTUnwrap(ChatAssistantAPIConfiguration(address: "https://example.com/v1", model: "test", key: ""))
+        let store = AssistantSessionStore(storageURL: directory.appendingPathComponent("sessions.json"), configuration: configuration)
+        let started = expectation(description: "first transport started")
+        let response = try XCTUnwrap(HTTPURLResponse(url: configuration.endpoint, statusCode: 200, httpVersion: nil, headerFields: nil))
+        let payload = Data(#"{"choices":[{"message":{"role":"assistant","content":"replacement reply"}}]}"#.utf8)
+        store.sendMessage("first") { _ in
+            started.fulfill()
+            // 模拟不及时响应取消的网络传输。
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            return (payload, response)
+        }
+        await fulfillment(of: [started], timeout: 2)
+        store.cancelGeneration()
+        store.sendMessage("second") { _ in
+            try await Task.sleep(nanoseconds: 800_000_000)
+            return (payload, response)
+        }
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertTrue(store.isGenerating, "旧任务结束不能清除新请求的生成状态")
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertFalse(store.isGenerating)
+        XCTAssertEqual(store.activeSession.turns.last?.content, "replacement reply")
+        XCTAssertFalse(store.activeSession.turns.contains { $0.role == .assistant && $0.content.isEmpty })
+    }
+
 }

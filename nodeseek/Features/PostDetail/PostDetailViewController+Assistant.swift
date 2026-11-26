@@ -4,20 +4,35 @@ import SwiftUI
 extension PostDetailViewController {
     func openPostAssistant() {
         guard presentedViewController == nil, replyTextView.markedTextRange == nil else { return }
-        guard displayMode == .content, showsReplyEntry, let header = currentHeaderContent else {
-            showError(message: ChatAssistantText.text("postEmpty"))
-            return
-        }
-        let messages = PostAssistantContext.messages(header: header, comments: comments)
+        syncPostContextToAssistant()
         replyTextView.resignFirstResponder()
-        let assistant = ChatAssistantView(messages: messages, canDraft: true, isPost: true) { [weak self] suggestion in
-            guard let self, displayMode == .content, showsReplyEntry, currentHeaderContent?.postID == header.postID,
+        FloatingAssistantOverlayManager.shared.presentPanel(from: self)
+    }
+
+    func syncPostContextToAssistant() {
+        guard displayMode == .content, let header = currentHeaderContent else { return }
+        let messages = PostAssistantContext.messages(header: header, comments: comments)
+        let postID = header.postID
+        let draftHandler: ((String) -> Bool)? = showsReplyEntry ? { [weak self] suggestion in
+            guard let self, displayMode == .content, showsReplyEntry, currentHeaderContent?.postID == postID,
                   replyTextView.isEditable, replyTextView.markedTextRange == nil else { return false }
             replyTextView.text = ChatAssistantContext.appending(suggestion, to: replyTextView.text ?? "")
             updateReplyBarDraftPreview()
             return true
-        }
-        present(UIHostingController(rootView: assistant), animated: true)
+        } : nil
+        AssistantSessionStore.shared.updateCurrentPostContext(
+            postID: postID,
+            title: header.title,
+            authorName: header.authorName,
+            commentCount: comments.count,
+            messages: messages,
+            draftHandler: draftHandler
+        )
+    }
+
+    func clearPostContextFromAssistant() {
+        guard let postID = currentHeaderContent?.postID else { return }
+        AssistantSessionStore.shared.clearCurrentPostContext(postID: postID)
     }
 }
 

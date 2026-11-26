@@ -50,6 +50,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let launchedFromPush = connectionOptions.notificationResponse != nil || !connectionOptions.urlContexts.isEmpty
         window.rootViewController = appRouter.makeRootViewController()
         AppMessageCenter.shared.attach(window: window)
+        FloatingAssistantOverlayManager.shared.attach(window: window)
 
         // 窗口显示后异步预热 WebView，供验证页回退使用；推送冷启动不弹引导，避免挡住跳转。
         DispatchQueue.main.async { [weak self, weak window] in
